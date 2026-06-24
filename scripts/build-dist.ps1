@@ -15,21 +15,6 @@ New-Item -ItemType Directory -Force $dist | Out-Null
 Push-Location $root
 try {
     go test ./...
-
-    $env:GOOS = "windows"
-    $env:GOARCH = "amd64"
-    go build -o (Join-Path $dist "go-doc_windows_amd64.exe") .
-
-    $env:GOOS = "darwin"
-    $env:GOARCH = "amd64"
-    go build -o (Join-Path $dist "go-doc_darwin_amd64") .
-
-    $env:GOOS = "darwin"
-    $env:GOARCH = "arm64"
-    go build -o (Join-Path $dist "go-doc_darwin_arm64") .
-
-    Remove-Item Env:\GOOS -ErrorAction SilentlyContinue
-    Remove-Item Env:\GOARCH -ErrorAction SilentlyContinue
 } finally {
     Pop-Location
 }

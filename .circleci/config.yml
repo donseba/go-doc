@@ -23,7 +23,7 @@ jobs:
           name: Install Java and Gradle
           command: |
             sudo apt-get update
-            sudo apt-get install -y openjdk-17-jdk unzip
+            sudo apt-get install -y jq openjdk-17-jdk unzip
             curl -fsSL https://services.gradle.org/distributions/gradle-9.6.0-bin.zip -o /tmp/gradle.zip
             unzip -q /tmp/gradle.zip -d /tmp
             echo 'export PATH=/tmp/gradle-9.6.0/bin:$PATH' >> "$BASH_ENV"
@@ -31,8 +31,11 @@ jobs:
           name: Check release versions
           command: bash scripts/check-release-version.sh "${CIRCLE_TAG}"
       - run:
-          name: Build release artifacts
+          name: Build IDE release artifacts
           command: bash scripts/build-dist.sh
+      - run:
+          name: Publish GitHub release
+          command: bash scripts/publish-github-release.sh "${CIRCLE_TAG}"
       - store_artifacts:
           path: dist
           destination: go-doc-dist

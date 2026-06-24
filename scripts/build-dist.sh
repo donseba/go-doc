@@ -10,10 +10,6 @@ mkdir -p "${DIST}"
 cd "${ROOT}"
 go test ./...
 
-GOOS=windows GOARCH=amd64 go build -o "${DIST}/go-doc_windows_amd64.exe" .
-GOOS=darwin GOARCH=amd64 go build -o "${DIST}/go-doc_darwin_amd64" .
-GOOS=darwin GOARCH=arm64 go build -o "${DIST}/go-doc_darwin_arm64" .
-
 cd "${ROOT}/ide/goland"
 gradle buildPlugin
 GOLAND_VERSION="$(gradle -q properties | awk -F': ' '/^version:/ {print $2; exit}')"

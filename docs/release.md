@@ -5,6 +5,9 @@ Official distributable artifacts are built by CircleCI from Git tags.
 Local builds are still useful while developing, but a release should come from CI
 so the artifacts are reproducible and attached to the tagged revision.
 
+CircleCI needs a `GITHUB_TOKEN` environment variable with permission to create
+releases and upload release assets for this repository.
+
 ## Version Rule
 
 The Git tag, GoLand plugin version, and VS Code extension version must match.
@@ -35,14 +38,16 @@ vMAJOR.MINOR.PATCH
 
 The workflow builds:
 
-- Windows `go-doc` CLI
-- macOS amd64 `go-doc` CLI
-- macOS arm64 `go-doc` CLI
 - GoLand plugin ZIP
 - VS Code VSIX
 - SHA256 checksums
 
-CircleCI stores the generated `dist` folder as workflow artifacts.
+CircleCI uploads the generated `dist` files to the GitHub Release for the tag
+and also stores the folder as workflow artifacts. The CLI is installed with:
+
+```bash
+go install github.com/donseba/go-doc@latest
+```
 
 ## Local Build
 

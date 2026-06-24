@@ -91,10 +91,10 @@ Current artifacts include:
 
 - GoLand plugin ZIP
 - VS Code VSIX
-- Windows `go-doc` CLI binary
-- macOS amd64 `go-doc` CLI binary
-- macOS arm64 `go-doc` CLI binary
 - SHA256 checksums
+
+The CLI is distributed through `go install github.com/donseba/go-doc@latest`;
+release archives only contain the IDE packages.
 
 Official release artifacts are built by CircleCI from Git tags. See
 [docs/release.md](docs/release.md).
