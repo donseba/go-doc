@@ -1,0 +1,55 @@
+version: 2.1
+
+jobs:
+  test:
+    docker:
+      - image: cimg/go:1.26.0-node
+    steps:
+      - checkout
+      - run:
+          name: Test Go packages
+          command: go test ./...
+      - run:
+          name: Check VS Code extension syntax
+          command: node --check ide/vscode/extension.js
+
+  release:
+    docker:
+      - image: cimg/go:1.26.0-node
+    resource_class: large
+    steps:
+      - checkout
+      - run:
+          name: Install Java and Gradle
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y openjdk-17-jdk unzip
+            curl -fsSL https://services.gradle.org/distributions/gradle-9.6.0-bin.zip -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp
+            echo 'export PATH=/tmp/gradle-9.6.0/bin:$PATH' >> "$BASH_ENV"
+      - run:
+          name: Check release versions
+          command: bash scripts/check-release-version.sh "${CIRCLE_TAG}"
+      - run:
+          name: Build release artifacts
+          command: bash scripts/build-dist.sh
+      - store_artifacts:
+          path: dist
+          destination: go-doc-dist
+
+workflows:
+  test:
+    jobs:
+      - test:
+          filters:
+            tags:
+              ignore: /.*/
+
+  release:
+    jobs:
+      - release:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+$/

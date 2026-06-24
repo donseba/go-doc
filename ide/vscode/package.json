@@ -1,0 +1,79 @@
+{
+  "name": "go-doc-vscode",
+  "displayName": "go-doc",
+  "description": "Template contract completion and diagnostics for Go template files.",
+  "version": "0.1.0",
+  "publisher": "donseba",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/donseba/go-doc"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "files": [
+    "extension.js",
+    "language-configuration.json",
+    "README.md",
+    "package.json"
+  ],
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:go-template",
+    "onLanguage:html",
+    "onCommand:goDoc.rebuildIndex",
+    "onCommand:goDoc.showIndexStatus",
+    "onCommand:goDoc.toggleAutoIndex"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "go-template",
+        "aliases": [
+          "Go Template",
+          "go-template"
+        ],
+        "extensions": [
+          ".gohtml",
+          ".tmpl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "goDoc.rebuildIndex",
+        "title": "go-doc: Rebuild Index"
+      },
+      {
+        "command": "goDoc.showIndexStatus",
+        "title": "go-doc: Show Index Status"
+      },
+      {
+        "command": "goDoc.toggleAutoIndex",
+        "title": "go-doc: Toggle Auto Index"
+      }
+    ],
+    "configuration": {
+      "title": "go-doc",
+      "properties": {
+        "goDoc.autoIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically rebuild .go-doc/index.json after Go or template files change."
+        },
+        "goDoc.debounceMilliseconds": {
+          "type": "number",
+          "default": 1200,
+          "minimum": 250,
+          "description": "Delay before automatic index rebuilds after file changes."
+        }
+      }
+    }
+  }
+}

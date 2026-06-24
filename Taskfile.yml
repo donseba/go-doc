@@ -1,0 +1,203 @@
+version: "3"
+
+vars:
+  GOLAND_DIR: ide/goland
+  VSCODE_DIR: ide/vscode
+  DIST_DIR: dist
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  doctor:
+    desc: Check whether local development tools are available
+    cmds:
+      - task: doctor:windows
+        platforms: [windows]
+      - task: doctor:unix
+        platforms: [darwin, linux]
+
+  doctor:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-doctor.ps1
+
+  doctor:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - sh -c 'for tool in go node npx java gradle; do if command -v "$tool" >/dev/null 2>&1; then echo "[ok] $tool -> $(command -v "$tool")"; else echo "[missing] $tool"; fi; done'
+
+  install:tools:
+    desc: Install local development tools for this platform
+    cmds:
+      - task: install:tools:windows
+        platforms: [windows]
+      - task: install:tools:mac
+        platforms: [darwin]
+      - task: install:tools:linux
+        platforms: [linux]
+
+  install:tools:windows:
+    desc: Install Go, Node.js, JDK 17, and Gradle through Scoop
+    platforms: [windows]
+    prompt: This installs Scoop when missing, then installs go, nodejs-lts, temurin17-jdk, and gradle. Continue?
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) { Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression }"
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "scoop install go nodejs-lts temurin17-jdk gradle"
+
+  install:tools:mac:
+    desc: Install Go, Node.js, JDK 17, and Gradle through Homebrew
+    platforms: [darwin]
+    prompt: This installs go, node, openjdk@17, and gradle through Homebrew. Continue?
+    cmds:
+      - brew install go node openjdk@17 gradle
+
+  install:tools:linux:
+    desc: Print Linux dependency instructions
+    platforms: [linux]
+    cmds:
+      - echo "Install Go 1.26+, Node.js, JDK 17, and Gradle with your distro package manager or SDKMAN/asdf."
+      - echo "CircleCI installs JDK and Gradle explicitly; see .circleci/config.yml."
+
+  install:cli:
+    desc: Install the go-doc CLI into GOPATH/bin
+    cmds:
+      - go install .
+
+  test:
+    desc: Run Go tests
+    cmds:
+      - go test ./...
+
+  build:cli:
+    desc: Build the local go-doc CLI
+    cmds:
+      - task: ensure:dist
+      - go build -o "{{.DIST_DIR}}/go-doc" .
+
+  build:goland:
+    desc: Build the GoLand plugin ZIP
+    cmds:
+      - task: build:goland:windows
+        platforms: [windows]
+      - task: build:goland:unix
+        platforms: [darwin, linux]
+
+  build:goland:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-goland.ps1
+
+  build:goland:unix:
+    internal: true
+    platforms: [darwin, linux]
+    dir: "{{.GOLAND_DIR}}"
+    cmds:
+      - gradle buildPlugin
+
+  build:vscode:
+    desc: Build the VS Code extension VSIX
+    cmds:
+      - task: build:vscode:windows
+        platforms: [windows]
+      - task: build:vscode:unix
+        platforms: [darwin, linux]
+
+  build:vscode:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-vscode.ps1
+
+  build:vscode:unix:
+    internal: true
+    platforms: [darwin, linux]
+    dir: "{{.VSCODE_DIR}}"
+    cmds:
+      - node --check extension.js
+      - npx --yes @vscode/vsce package --out "../../{{.DIST_DIR}}/go-doc-vscode-$(node -p \"require('./package.json').version\").vsix"
+
+  dist:
+    desc: Build all local development artifacts
+    cmds:
+      - task: dist:windows
+        platforms: [windows]
+      - task: dist:unix
+        platforms: [darwin, linux]
+
+  dist:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-dist.ps1
+
+  dist:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - bash scripts/build-dist.sh
+
+  check:release-version:
+    desc: Check that IDE versions match a release tag, for example task check:release-version -- v0.2.5
+    cmds:
+      - task: check:release-version:windows
+        platforms: [windows]
+      - task: check:release-version:unix
+        platforms: [darwin, linux]
+
+  check:release-version:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-release-version.ps1 "{{.CLI_ARGS}}"
+
+  check:release-version:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - bash scripts/check-release-version.sh "{{.CLI_ARGS}}"
+
+  clean:
+    desc: Remove local build outputs
+    cmds:
+      - task: clean:windows
+        platforms: [windows]
+      - task: clean:unix
+        platforms: [darwin, linux]
+
+  clean:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -Recurse -Force '{{.DIST_DIR}}','{{.GOLAND_DIR}}\build' -ErrorAction SilentlyContinue"
+
+  clean:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - rm -rf "{{.DIST_DIR}}" "{{.GOLAND_DIR}}/build"
+
+  ensure:dist:
+    internal: true
+    cmds:
+      - task: ensure:dist:windows
+        platforms: [windows]
+      - task: ensure:dist:unix
+        platforms: [darwin, linux]
+
+  ensure:dist:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force '{{.DIST_DIR}}' | Out-Null"
+
+  ensure:dist:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - mkdir -p "{{.DIST_DIR}}"
