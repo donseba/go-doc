@@ -30,6 +30,9 @@ try {
 Copy-Item -Force (Join-Path $root "ide\goland\build\distributions\go-doc-goland-plugin-$golandVersion.zip") $dist
 
 & (Join-Path $PSScriptRoot "build-vscode.ps1")
+& (Join-Path $PSScriptRoot "build-sublime.ps1")
+& (Join-Path $PSScriptRoot "build-vim.ps1")
+& (Join-Path $PSScriptRoot "build-neovim.ps1")
 
 Get-ChildItem $dist |
     Where-Object { $_.Name -ne "SHA256SUMS.txt" } |

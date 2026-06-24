@@ -78,7 +78,6 @@ object GoDocIndexWatcher {
             it == ".git" ||
                 it == ".idea" ||
                 it == ".go-doc" ||
-                it == ".partial" ||
                 it == "build" ||
                 it == "out" ||
                 it == "vendor" ||

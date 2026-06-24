@@ -10,7 +10,7 @@ class ShowIndexStatusAction : AnAction() {
         val project = event.project ?: return
         val filePath = event.getData(com.intellij.openapi.actionSystem.CommonDataKeys.VIRTUAL_FILE)?.path
         val index = GoDocIndex.load(project, filePath)
-        val source = index.source ?: "no .go-doc/index.json or .partial/index.json found"
+        val source = index.source ?: "no .go-doc/index.json found"
         val relative = relativePath(project.basePath, filePath)
         val contract = index.contractForFile(project, filePath)
         val content = listOf(

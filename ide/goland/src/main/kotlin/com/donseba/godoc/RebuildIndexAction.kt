@@ -41,7 +41,11 @@ class RebuildIndexAction : AnAction() {
 
         ApplicationManager.getApplication().invokeLater {
             GoDocIndex.refreshVirtualIndex(project)
-            notify(project, "go-doc index rebuilt", ".go-doc/index.json updated", NotificationType.INFORMATION)
+            if (outFile.isFile) {
+                notify(project, "go-doc index rebuilt", ".go-doc/index.json updated", NotificationType.INFORMATION)
+            } else {
+                notify(project, "go-doc index not needed", "No @model annotations found; index not written.", NotificationType.INFORMATION)
+            }
         }
     }
 

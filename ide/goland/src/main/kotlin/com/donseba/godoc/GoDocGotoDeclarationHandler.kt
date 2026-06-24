@@ -3,6 +3,7 @@ package com.donseba.godoc
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiManager
@@ -16,24 +17,28 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
     ): Array<PsiElement>? {
         val file = sourceElement?.containingFile ?: return null
         val virtualFile = file.virtualFile ?: return null
-        if (virtualFile.extension !in setOf("gohtml", "tmpl", "html")) return null
+        if (!isSupportedTemplate(virtualFile)) return null
 
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
-        val contract = index.contractForFile(project, virtualFile.path) ?: return null
-        TemplateContext.typeReferenceAt(file.text, offset, index)?.let { reference ->
+        GoDocTemplateContext.typeReferenceAt(file.text, offset, index)?.let { reference ->
             val type = index.types[reference.typeName] ?: return null
             return targetElement(project, index, type.file, type.line, type.column)
         }
 
-        val reference = TemplateContext.fieldReferenceAt(file.text, offset, index, contract) ?: return null
-        val field = index.types[reference.ownerTypeName]?.fields?.get(reference.fieldName) ?: return null
-        val targetFile = field.file.ifBlank { index.types[reference.ownerTypeName]?.file.orEmpty() }
-        return targetElement(project, index, targetFile, field.line, field.column)
+        val contract = index.contractForFile(project, virtualFile.path) ?: return null
+        val reference = GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract) ?: return null
+        val owner = index.types[reference.ownerTypeName] ?: return null
+        val field = owner.fields[reference.memberName]
+        if (field != null) {
+            return targetElement(project, index, field.file.ifBlank { owner.file }, field.line, field.column)
+        }
+        val method = owner.methods[reference.memberName] ?: return null
+        return targetElement(project, index, method.file.ifBlank { owner.file }, method.line, method.column)
     }
 
     private fun targetElement(
-        project: com.intellij.openapi.project.Project,
+        project: Project,
         index: GoDocIndex,
         targetFile: String,
         targetLine: Int,

@@ -2,9 +2,15 @@
   "name": "go-doc-vscode",
   "displayName": "go-doc",
   "description": "Template contract completion and diagnostics for Go template files.",
-  "version": "0.1.0",
+  "version": "0.8.0",
   "publisher": "donseba",
+  "author": {
+    "name": "Sebastiano Bellinzis",
+    "email": "sebastiano.bellinzis@outlook.com",
+    "url": "https://github.com/donseba"
+  },
   "license": "MIT",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/donseba/go-doc"
@@ -14,10 +20,12 @@
   },
   "files": [
     "extension.js",
+    "icon.png",
     "language-configuration.json",
     "LICENSE",
     "README.md",
-    "package.json"
+    "package.json",
+    "node_modules/**"
   ],
   "categories": [
     "Programming Languages",
@@ -25,10 +33,16 @@
   ],
   "activationEvents": [
     "onLanguage:go-template",
+    "onLanguage:go-html-template",
+    "onLanguage:gotmpl",
     "onLanguage:html",
+    "onStartupFinished",
+    "workspaceContains:**/*.gohtml",
+    "workspaceContains:**/*.tmpl",
     "onCommand:goDoc.rebuildIndex",
     "onCommand:goDoc.showIndexStatus",
-    "onCommand:goDoc.toggleAutoIndex"
+    "onCommand:goDoc.toggleAutoIndex",
+    "onCommand:goDoc.restartLsp"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -58,8 +72,36 @@
       {
         "command": "goDoc.toggleAutoIndex",
         "title": "go-doc: Toggle Auto Index"
+      },
+      {
+        "command": "goDoc.restartLsp",
+        "title": "go-doc: Restart LSP"
       }
     ],
+    "configurationDefaults": {
+      "[go-template]": {
+        "editor.semanticHighlighting.enabled": true
+      },
+      "[go-html-template]": {
+        "editor.semanticHighlighting.enabled": true
+      },
+      "[gotmpl]": {
+        "editor.semanticHighlighting.enabled": true
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "rules": {
+          "variable:go-template": "#DCDCAA",
+          "property:go-template": "#9CDCFE",
+          "type:go-template": "#4EC9B0",
+          "variable:go-html-template": "#DCDCAA",
+          "property:go-html-template": "#9CDCFE",
+          "type:go-html-template": "#4EC9B0",
+          "variable:gotmpl": "#DCDCAA",
+          "property:gotmpl": "#9CDCFE",
+          "type:gotmpl": "#4EC9B0"
+        }
+      }
+    },
     "configuration": {
       "title": "go-doc",
       "properties": {
@@ -76,5 +118,8 @@
         }
       }
     }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }

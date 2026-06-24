@@ -1,17 +1,17 @@
-# go-doc VS Code extension
+# go-doc for VS Code
 
-This extension reads `.go-doc/index.json` and improves Go template editing in
-VS Code.
+VS Code integration for typed Go templates powered by `go-doc lsp`.
 
-It supports:
+## Features
 
-- completions for `@param` and `@var` Go type names
+- completions for `@model` Go type names
 - completions for typed template accessors such as `_page.`
 - completions for dot context inside `range` blocks
+- completions for exported fields and methods
 - diagnostics for unknown accessors and fields
 - diagnostics for invalid range sources such as `range _page.Title`
-- quick fixes for close field-name matches
-- hover and go to definition for contract types and fields
+- hover and go to definition for contract types, fields, and methods
+- semantic highlighting for model types, accessors, fields, and methods
 - debounced automatic index rebuilds
 
 ## Requirements
@@ -25,19 +25,33 @@ go install github.com/donseba/go-doc@latest
 If the CLI is missing when the extension rebuilds the index, VS Code asks before
 running that install command for you.
 
+## Quick Start
+
 Generate the first index from a Go module root:
 
 ```bash
 go-doc index -o .go-doc/index.json .
 ```
 
-The extension also falls back to `.partial/index.json` for compatibility.
+The language server can build an in-memory index when no generated file exists,
+but writing `.go-doc/index.json` lets VS Code rebuild and refresh the shared
+server state after edits.
+
+Add a template contract:
+
+```gotemplate
+{{/*
+@model page github.com/example/app.Page
+*/}}
+{{ _page.Title }}
+```
 
 ## Commands
 
 - `go-doc: Rebuild Index`
 - `go-doc: Show Index Status`
 - `go-doc: Toggle Auto Index`
+- `go-doc: Restart LSP`
 
 ## Settings
 

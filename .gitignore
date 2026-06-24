@@ -1,13 +1,39 @@
-.gradle/
+# Editor and OS noise
 .idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Generic build output
 build/
 out/
 dist/
+docs/
+tmp/
+coverage.out
+*.test
+*.prof
+
+# JavaScript tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 ide/goland/.gradle/
 ide/goland/.intellijPlatform/
 ide/goland/.kotlin/
 ide/goland/build/
+ide/goland/out/
+
+ide/vscode/out/
+ide/vscode/*.vsix
+
+ide/sublime/*.sublime-package
 
 .go-doc/
-.partial/
+
+!examples/standalone/.go-doc/
+!examples/standalone/.go-doc/index.json
+!examples/todo/.go-doc/
+!examples/todo/.go-doc/index.json

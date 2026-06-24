@@ -1,0 +1,18 @@
+{{/*
+@model page github.com/donseba/go-doc/examples/todo.TodoPage
+*/}}
+<section aria-labelledby="todo-list-title">
+    <h2 id="todo-list-title">Todos</h2>
+    <p>{{ len _page.Todos }} tasks for {{ _page.Owner.Name }}.</p>
+
+    <ul>
+        {{ range _page.Todos }}
+            <li>
+                <a href="/todos/{{ .ID }}">{{ .Title }}</a>
+                <span>{{ .Priority }}</span>
+                <span>{{ .Status }}</span>
+                <small>due {{ .DueLabel }}</small>
+            </li>
+        {{ end }}
+    </ul>
+</section>

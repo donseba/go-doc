@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.donseba.godoc"
-version = "0.1.0"
+version = "0.8.0"
 
 kotlin {
     jvmToolchain(17)
@@ -27,3 +27,5 @@ dependencies {
         bundledPlugin("org.jetbrains.plugins.go-template")
     }
 }
+
+

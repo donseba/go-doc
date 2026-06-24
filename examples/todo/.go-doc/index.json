@@ -1,0 +1,193 @@
+{
+  "version": 2,
+  "module": "github.com/donseba/go-doc/examples/todo",
+  "templates": {
+    "templates/main.gohtml": {
+      "models": {
+        "page": "github.com/donseba/go-doc/examples/todo.TodoPage"
+      },
+      "accessors": {
+        "_page": "github.com/donseba/go-doc/examples/todo.TodoPage"
+      }
+    },
+    "templates/todo_detail.gohtml": {
+      "models": {
+        "todo": "github.com/donseba/go-doc/examples/todo.Todo"
+      },
+      "accessors": {
+        "_todo": "github.com/donseba/go-doc/examples/todo.Todo"
+      }
+    },
+    "templates/todo_list.gohtml": {
+      "models": {
+        "page": "github.com/donseba/go-doc/examples/todo.TodoPage"
+      },
+      "accessors": {
+        "_page": "github.com/donseba/go-doc/examples/todo.TodoPage"
+      }
+    }
+  },
+  "types": {
+    "github.com/donseba/go-doc/examples/todo.Todo": {
+      "name": "Todo",
+      "package": "github.com/donseba/go-doc/examples/todo",
+      "file": "models.go",
+      "line": 24,
+      "column": 6,
+      "doc": "Todo is one task in the todo list.",
+      "fields": {
+        "Description": {
+          "type": "string",
+          "file": "models.go",
+          "line": 27,
+          "column": 2
+        },
+        "Done": {
+          "type": "bool",
+          "file": "models.go",
+          "line": 29,
+          "column": 2
+        },
+        "DueAt": {
+          "type": "time.Time",
+          "file": "models.go",
+          "line": 30,
+          "column": 2
+        },
+        "ID": {
+          "type": "int",
+          "file": "models.go",
+          "line": 25,
+          "column": 2
+        },
+        "Priority": {
+          "type": "string",
+          "file": "models.go",
+          "line": 28,
+          "column": 2
+        },
+        "Tags": {
+          "type": "[]string",
+          "file": "models.go",
+          "line": 31,
+          "column": 2
+        },
+        "Title": {
+          "type": "string",
+          "file": "models.go",
+          "line": 26,
+          "column": 2
+        }
+      },
+      "methods": {
+        "DueLabel": {
+          "type": "string",
+          "signature": "func() string",
+          "doc": "DueLabel formats the due date for templates.",
+          "file": "models.go",
+          "line": 43,
+          "column": 15
+        },
+        "Status": {
+          "type": "string",
+          "signature": "func() string",
+          "doc": "Status returns the display status for the todo.",
+          "file": "models.go",
+          "line": 35,
+          "column": 15
+        }
+      }
+    },
+    "github.com/donseba/go-doc/examples/todo.TodoPage": {
+      "name": "TodoPage",
+      "package": "github.com/donseba/go-doc/examples/todo",
+      "file": "models.go",
+      "line": 6,
+      "column": 6,
+      "doc": "TodoPage is the top-level model for the todo shell.",
+      "fields": {
+        "DoneCount": {
+          "type": "int",
+          "file": "models.go",
+          "line": 12,
+          "column": 2
+        },
+        "GeneratedAt": {
+          "type": "time.Time",
+          "file": "models.go",
+          "line": 13,
+          "column": 2
+        },
+        "OpenCount": {
+          "type": "int",
+          "file": "models.go",
+          "line": 11,
+          "column": 2
+        },
+        "Owner": {
+          "type": "User",
+          "file": "models.go",
+          "line": 8,
+          "column": 2
+        },
+        "Selected": {
+          "type": "Todo",
+          "file": "models.go",
+          "line": 10,
+          "column": 2
+        },
+        "Title": {
+          "type": "string",
+          "file": "models.go",
+          "line": 7,
+          "column": 2
+        },
+        "Todos": {
+          "type": "[]Todo",
+          "file": "models.go",
+          "line": 9,
+          "column": 2
+        }
+      }
+    },
+    "github.com/donseba/go-doc/examples/todo.User": {
+      "name": "User",
+      "package": "github.com/donseba/go-doc/examples/todo",
+      "file": "models.go",
+      "line": 17,
+      "column": 6,
+      "doc": "User is the person who owns the todo list.",
+      "fields": {
+        "Email": {
+          "type": "string",
+          "file": "models.go",
+          "line": 20,
+          "column": 2
+        },
+        "ID": {
+          "type": "int",
+          "file": "models.go",
+          "line": 18,
+          "column": 2
+        },
+        "Name": {
+          "type": "string",
+          "file": "models.go",
+          "line": 19,
+          "column": 2
+        }
+      }
+    }
+  },
+  "short": {
+    "Todo": [
+      "github.com/donseba/go-doc/examples/todo.Todo"
+    ],
+    "TodoPage": [
+      "github.com/donseba/go-doc/examples/todo.TodoPage"
+    ],
+    "User": [
+      "github.com/donseba/go-doc/examples/todo.User"
+    ]
+  }
+}

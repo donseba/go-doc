@@ -1,0 +1,38 @@
+{{/*
+@model page github.com/donseba/go-doc/examples/todo.TodoPage
+*/}}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{{ _page.Title }}</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5; }
+        main { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 28rem); gap: 2rem; align-items: start; }
+        a { color: #0f766e; }
+        section, aside { border: 1px solid #d6d3d1; border-radius: .5rem; padding: 1rem; background: #fff; }
+        li { margin: .75rem 0; }
+        span, small { margin-left: .5rem; color: #57534e; }
+        button { border: 1px solid #0f766e; border-radius: .35rem; background: #0f766e; color: white; padding: .4rem .7rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <header>
+        <p>go-doc todo example</p>
+        <h1>{{ _page.Title }}</h1>
+        <p>
+            Owned by {{ _page.Owner.Name }}.
+            {{ _page.OpenCount }} open, {{ _page.DoneCount }} done.
+        </p>
+    </header>
+
+    <main>
+        {{ template "todo_list.gohtml" }}
+        {{ template "todo_detail.gohtml" }}
+    </main>
+
+    <footer>
+        Generated at {{ _page.GeneratedAt.Format "15:04:05" }}.
+    </footer>
+</body>
+</html>

@@ -16,7 +16,7 @@ class GoDocStartupActivity : ProjectActivity {
         val basePath = project.basePath ?: return
         val root = GoDocIndexer.findModuleRoot(basePath) ?: File(basePath)
         if (!File(root, "go.mod").isFile) return
-        if (File(root, ".go-doc/index.json").isFile || File(root, ".partial/index.json").isFile) return
+        if (File(root, ".go-doc/index.json").isFile) return
 
         object : Task.Backgroundable(project, "Building go-doc index", false) {
             override fun run(indicator: ProgressIndicator) {
@@ -35,7 +35,9 @@ class GoDocStartupActivity : ProjectActivity {
                 }
                 ApplicationManager.getApplication().invokeLater {
                     GoDocIndex.refreshVirtualIndex(project)
-                    notify(project, "go-doc index built", ".go-doc/index.json created", NotificationType.INFORMATION)
+                    if (outFile.isFile) {
+                        notify(project, "go-doc index built", ".go-doc/index.json created", NotificationType.INFORMATION)
+                    }
                 }
             }
         }.queue()

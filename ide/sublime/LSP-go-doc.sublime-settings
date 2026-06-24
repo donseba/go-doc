@@ -1,0 +1,9 @@
+{
+  // Requires `go-doc` on PATH:
+  //   go install github.com/donseba/go-doc@latest
+  "enabled": true,
+  "command": ["go-doc", "lsp"],
+  "selector": "text.html.go-template",
+  "schemes": ["file"],
+  "semantic_highlighting": true
+}

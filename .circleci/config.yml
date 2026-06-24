@@ -28,6 +28,9 @@ jobs:
             unzip -q /tmp/gradle.zip -d /tmp
             echo 'export PATH=/tmp/gradle-9.6.0/bin:$PATH' >> "$BASH_ENV"
       - run:
+          name: Set release versions from tag
+          command: bash scripts/set-release-version.sh "${CIRCLE_TAG}"
+      - run:
           name: Check release versions
           command: bash scripts/check-release-version.sh "${CIRCLE_TAG}"
       - run:

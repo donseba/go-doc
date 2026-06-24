@@ -1,19 +1,17 @@
 <idea-plugin>
     <id>com.donseba.godoc</id>
     <name>go-doc</name>
-    <vendor email="opensource@donseba.com" url="https://github.com/donseba/go-doc">donseba</vendor>
+    <vendor email="sebastiano.bellinzis@outlook.com" url="https://github.com/donseba/go-doc">Sebastiano Bellinzis</vendor>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.lsp</depends>
+    <depends>com.intellij.modules.ultimate</depends>
     <depends>org.jetbrains.plugins.go-template</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <notificationGroup id="go-doc" displayType="BALLOON"/>
-        <annotator language="GoTemplate" implementationClass="com.donseba.godoc.GoDocTemplateAnnotator"/>
-        <completion.contributor language="GoTemplate" implementationClass="com.donseba.godoc.GoDocCompletionContributor"/>
-        <completion.contributor language="HTML" implementationClass="com.donseba.godoc.GoDocCompletionContributor"/>
-        <completion.contributor language="TEXT" implementationClass="com.donseba.godoc.GoDocCompletionContributor"/>
-        <completion.contributor implementationClass="com.donseba.godoc.GoDocCompletionContributor"/>
+        <platform.lsp.serverSupportProvider implementation="com.donseba.godoc.GoDocLspServerSupportProvider"/>
         <gotoDeclarationHandler implementation="com.donseba.godoc.GoDocGotoDeclarationHandler"/>
         <documentationProvider implementation="com.donseba.godoc.GoDocDocumentationProvider"/>
         <postStartupActivity implementation="com.donseba.godoc.GoDocStartupActivity"/>

@@ -1,0 +1,17 @@
+[
+  {
+    "caption": "Preferences: LSP-go-doc Settings",
+    "command": "edit_settings",
+    "args": {
+      "base_file": "${packages}/LSP-go-doc/LSP-go-doc.sublime-settings",
+      "default": "// Settings in here override those in \"LSP-go-doc/LSP-go-doc.sublime-settings\"\n\n{\n\t$0\n}\n"
+    }
+  },
+  {
+    "caption": "LSP-go-doc: Open README",
+    "command": "open_file",
+    "args": {
+      "file": "${packages}/LSP-go-doc/README.md"
+    }
+  }
+]

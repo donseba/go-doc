@@ -3,6 +3,9 @@ version: "3"
 vars:
   GOLAND_DIR: ide/goland
   VSCODE_DIR: ide/vscode
+  SUBLIME_DIR: ide/sublime
+  VIM_DIR: ide/vim
+  NEOVIM_DIR: ide/neovim
   DIST_DIR: dist
 
 tasks:
@@ -119,8 +122,69 @@ tasks:
     platforms: [darwin, linux]
     dir: "{{.VSCODE_DIR}}"
     cmds:
+      - npm ci
       - node --check extension.js
-      - npx --yes @vscode/vsce package --no-dependencies --out "../../{{.DIST_DIR}}/go-doc-vscode-$(node -p \"require('./package.json').version\").vsix"
+      - npx --yes @vscode/vsce package --out "../../{{.DIST_DIR}}/go-doc-vscode-$(node -p \"require('./package.json').version\").vsix"
+
+  build:sublime:
+    desc: Build the Sublime Text package
+    cmds:
+      - task: build:sublime:windows
+        platforms: [windows]
+      - task: build:sublime:unix
+        platforms: [darwin, linux]
+
+  build:sublime:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-sublime.ps1
+
+  build:sublime:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - bash scripts/build-sublime.sh
+
+  build:vim:
+    desc: Build the Vim plugin ZIP
+    cmds:
+      - task: build:vim:windows
+        platforms: [windows]
+      - task: build:vim:unix
+        platforms: [darwin, linux]
+
+  build:vim:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-vim.ps1
+
+  build:vim:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - bash scripts/build-vim.sh
+
+  build:neovim:
+    desc: Build the Neovim plugin ZIP
+    cmds:
+      - task: build:neovim:windows
+        platforms: [windows]
+      - task: build:neovim:unix
+        platforms: [darwin, linux]
+
+  build:neovim:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-neovim.ps1
+
+  build:neovim:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - bash scripts/build-neovim.sh
 
   dist:
     desc: Build IDE release artifacts
@@ -161,6 +225,26 @@ tasks:
     platforms: [darwin, linux]
     cmds:
       - bash scripts/check-release-version.sh "{{.CLI_ARGS}}"
+
+  set:release-version:
+    desc: Set IDE package versions from a release tag, for example task set:release-version -- v0.1.0
+    cmds:
+      - task: set:release-version:windows
+        platforms: [windows]
+      - task: set:release-version:unix
+        platforms: [darwin, linux]
+
+  set:release-version:windows:
+    internal: true
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/set-release-version.ps1 "{{.CLI_ARGS}}"
+
+  set:release-version:unix:
+    internal: true
+    platforms: [darwin, linux]
+    cmds:
+      - bash scripts/set-release-version.sh "{{.CLI_ARGS}}"
 
   clean:
     desc: Remove local build outputs

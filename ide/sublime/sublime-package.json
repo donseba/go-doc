@@ -1,0 +1,12 @@
+{
+  "name": "LSP-go-doc",
+  "version": "0.8.0",
+  "description": "Sublime Text LSP configuration for go-doc typed Go templates.",
+  "author": "Sebastiano Bellinzis <sebastiano.bellinzis@outlook.com> (https://github.com/donseba)",
+  "icon": "icon.png",
+  "issues": "https://github.com/donseba/go-doc/issues",
+  "url": "https://github.com/donseba/go-doc",
+  "dependencies": [
+    "LSP"
+  ]
+}

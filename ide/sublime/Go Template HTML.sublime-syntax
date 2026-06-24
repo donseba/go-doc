@@ -1,0 +1,51 @@
+%YAML 1.2
+---
+name: Go Template HTML
+file_extensions:
+  - gohtml
+  - tmpl
+scope: text.html.go-template
+contexts:
+  main:
+    - include: go-doc-contract
+    - include: go-template-action
+    - include: scope:text.html.basic
+
+  go-doc-contract:
+    - match: '{{/\*'
+      scope: punctuation.definition.comment.begin.go-template
+      push: go-doc-contract-body
+
+  go-doc-contract-body:
+    - meta_scope: comment.block.go-template
+    - match: '\*/}}'
+      scope: punctuation.definition.comment.end.go-template
+      pop: true
+    - match: '(@model)\s+([A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)'
+      captures:
+        1: keyword.other.go-doc
+        2: variable.parameter.go-doc
+        3: entity.name.type.go-doc
+
+  go-template-action:
+    - match: '{{/?-?'
+      scope: punctuation.section.embedded.begin.go-template
+      push: go-template-expression
+
+  go-template-expression:
+    - meta_scope: meta.embedded.go-template
+    - match: '-?}}'
+      scope: punctuation.section.embedded.end.go-template
+      pop: true
+    - match: '\b(range|with|if|else|end|template|block|define)\b'
+      scope: keyword.control.go-template
+    - match: '@model\b'
+      scope: keyword.other.go-doc
+    - match: '\.[A-Za-z][A-Za-z0-9_]*'
+      scope: variable.other.member.go-template
+    - match: '[$_A-Za-z][$_A-Za-z0-9]*'
+      scope: variable.other.go-template
+    - match: '"[^"]*"'
+      scope: string.quoted.double.go-template
+    - match: "'[^']*'"
+      scope: string.quoted.single.go-template

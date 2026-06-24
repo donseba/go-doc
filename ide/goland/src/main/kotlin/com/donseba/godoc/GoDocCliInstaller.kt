@@ -40,7 +40,11 @@ object GoDocCliInstaller {
 
                     ApplicationManager.getApplication().invokeLater {
                         GoDocIndex.refreshVirtualIndex(project)
-                        notify(project, "go-doc index rebuilt", successMessage, NotificationType.INFORMATION)
+                        if (outFile.isFile) {
+                            notify(project, "go-doc index rebuilt", successMessage, NotificationType.INFORMATION)
+                        } else {
+                            notify(project, "go-doc index not needed", "No @model annotations found; index not written.", NotificationType.INFORMATION)
+                        }
                     }
                 }
             }.queue()

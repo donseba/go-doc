@@ -19,13 +19,25 @@ type Todo struct {
 	private string
 }
 
+// Label returns the template label.
+func (t Todo) Label() string {
+	return t.Title
+}
+
 type Page struct {
 	Items []Todo
 }
+
+type User struct {
+	Name string
+}
+
+type privateState struct {
+	Token string
+}
 `)
 	writeFile(t, root, "templates/todos.gohtml", `{{/*
-@param page Page
-@var $todo Todo
+@model page Page
 */}}
 {{ range $todo := _page.Items }}{{ $todo.Title }}{{ end }}
 `)
@@ -58,16 +70,167 @@ type Page struct {
 	if _, ok := todoType.Fields["private"]; ok {
 		t.Fatal("unexported field should not be indexed")
 	}
+	method := todoType.Methods["Label"]
+	if method.Type != "string" {
+		t.Fatalf("Label return type = %q, want string", method.Type)
+	}
+	if method.Signature == "" || method.Doc == "" || method.Line == 0 {
+		t.Fatalf("expected method metadata, got %#v", method)
+	}
+	if _, ok := idx.Types["example.com/app.User"]; !ok {
+		t.Fatal("unused exported structs should stay indexed for @model completion")
+	}
+	if _, ok := idx.Types["example.com/app.privateState"]; ok {
+		t.Fatal("unexported structs should not be indexed")
+	}
 
 	contract := idx.Templates["templates/todos.gohtml"]
-	if contract.Params["page"] != "example.com/app.Page" {
-		t.Fatalf("@param page = %q", contract.Params["page"])
-	}
-	if contract.Vars["$todo"] != "example.com/app.Todo" {
-		t.Fatalf("@var $todo = %q", contract.Vars["$todo"])
+	if contract.Models["page"] != "example.com/app.Page" {
+		t.Fatalf("@model page = %q", contract.Models["page"])
 	}
 	if contract.Accessors["_page"] != "example.com/app.Page" {
 		t.Fatalf("_page accessor = %q", contract.Accessors["_page"])
+	}
+}
+
+func TestBuildTemplateIndexRequiresParamContract(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "todo.go", `package app
+
+type Todo struct {
+	Title string
+}
+`)
+	writeFile(t, root, "templates/no_contract.gohtml", `{{ .Title }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if needed {
+		t.Fatal("index should not be needed without at least one @model annotation")
+	}
+	if len(idx.Types) != 0 {
+		t.Fatalf("types should not be scanned when index is not needed, got %#v", idx.Types)
+	}
+}
+
+func TestBuildIndexUsesConfigIncludeExclude(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "include": ["/"],
+  "exclude": ["vendor", "internal/secret"]
+}`)
+	writeFile(t, root, "public.go", `package app
+
+type Public struct {
+	Title string
+}
+`)
+	writeFile(t, root, "vendor/vendor.go", `package vendor
+
+type VendorType struct {
+	Title string
+}
+`)
+	writeFile(t, root, "internal/secret/secret.go", `package secret
+
+type Secret struct {
+	Title string
+}
+`)
+	writeFile(t, root, "templates/public.gohtml", `{{/*
+@model public Public
+*/}}
+{{ _public.Title }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	if _, ok := idx.Types["example.com/app.Public"]; !ok {
+		t.Fatal("public type should be indexed")
+	}
+	if _, ok := idx.Types["example.com/app/vendor.VendorType"]; ok {
+		t.Fatal("vendor type should be excluded")
+	}
+	if _, ok := idx.Types["example.com/app/internal/secret.Secret"]; ok {
+		t.Fatal("configured excluded type should be excluded")
+	}
+}
+
+func TestPathMatchesNormalizesWindowsSeparators(t *testing.T) {
+	tests := []struct {
+		relative string
+		pattern  string
+		want     bool
+	}{
+		{relative: "internal/secret/model.go", pattern: `internal\secret`, want: true},
+		{relative: `internal\secret\model.go`, pattern: "internal/secret", want: true},
+		{relative: "templates/main.gohtml", pattern: "/", want: true},
+		{relative: "templates/main.gohtml", pattern: "vendor", want: false},
+	}
+	for _, test := range tests {
+		if got := pathMatches(test.relative, test.pattern); got != test.want {
+			t.Fatalf("pathMatches(%q, %q) = %v, want %v", test.relative, test.pattern, got, test.want)
+		}
+	}
+}
+
+func TestBuildIndexSkipsNestedModules(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "page.go", `package app
+
+type Page struct {
+	Title string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@model page Page
+*/}}
+{{ _page.Title }}`)
+	writeFile(t, root, "examples/todo/go.mod", "module example.com/app/examples/todo\n\ngo 1.26\n")
+	writeFile(t, root, "examples/todo/todo.go", `package main
+
+type Todo struct {
+	Title string
+}
+`)
+	writeFile(t, root, "examples/todo/templates/todo.gohtml", `{{/*
+@model todo github.com/example/app/examples/todo.Todo
+*/}}
+{{ _todo.Title }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	if _, ok := idx.Templates["templates/page.gohtml"]; !ok {
+		t.Fatal("root template should be indexed")
+	}
+	if _, ok := idx.Templates["examples/todo/templates/todo.gohtml"]; ok {
+		t.Fatal("nested module template should not be indexed by parent module")
+	}
+	if _, ok := idx.Types["example.com/app/examples/todo.Todo"]; ok {
+		t.Fatal("nested module type should not be indexed by parent module")
+	}
+}
+
+func TestIndexCommandRemovesStaleOutputWhenNoParamContractExists(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "templates/no_contract.gohtml", `{{ .Title }}`)
+	out := filepath.Join(root, ".go-doc", "index.json")
+	writeFile(t, root, ".go-doc/index.json", `{"stale": true}`)
+
+	if err := Run([]string{"index", "-o", out, root}); err != nil {
+		t.Fatalf("Run(index) error = %v", err)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("expected stale index to be removed, stat err = %v", err)
 	}
 }
 

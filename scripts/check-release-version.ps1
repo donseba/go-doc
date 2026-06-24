@@ -31,12 +31,18 @@ try {
     Pop-Location
 }
 
+$sublimeVersion = (Get-Content (Join-Path $root "ide\sublime\sublime-package.json") | ConvertFrom-Json).version
+
 if ($golandVersion -ne $version) {
     Write-Error "GoLand plugin version $golandVersion does not match tag $Tag"
 }
 
 if ($vscodeVersion -ne $version) {
     Write-Error "VS Code extension version $vscodeVersion does not match tag $Tag"
+}
+
+if ($sublimeVersion -ne $version) {
+    Write-Error "Sublime Text package version $sublimeVersion does not match tag $Tag"
 }
 
 Write-Host "release version $version matches $Tag"
