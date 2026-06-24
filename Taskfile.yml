@@ -120,7 +120,7 @@ tasks:
     dir: "{{.VSCODE_DIR}}"
     cmds:
       - node --check extension.js
-      - npx --yes @vscode/vsce package --out "../../{{.DIST_DIR}}/go-doc-vscode-$(node -p \"require('./package.json').version\").vsix"
+      - npx --yes @vscode/vsce package --no-dependencies --out "../../{{.DIST_DIR}}/go-doc-vscode-$(node -p \"require('./package.json').version\").vsix"
 
   dist:
     desc: Build all local development artifacts

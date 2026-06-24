@@ -15,6 +15,7 @@
   "files": [
     "extension.js",
     "language-configuration.json",
+    "LICENSE",
     "README.md",
     "package.json"
   ],

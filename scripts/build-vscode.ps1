@@ -9,7 +9,7 @@ Push-Location (Join-Path $root "ide\vscode")
 try {
     node --check extension.js
     $version = node -p "require('./package.json').version"
-    npx --yes @vscode/vsce package --out "../../dist/go-doc-vscode-$version.vsix"
+    npx --yes @vscode/vsce package --no-dependencies --out "../../dist/go-doc-vscode-$version.vsix"
 } finally {
     Pop-Location
 }

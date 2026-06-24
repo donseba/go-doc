@@ -21,7 +21,7 @@ cp "build/distributions/go-doc-goland-plugin-${GOLAND_VERSION}.zip" "${DIST}/"
 
 cd "${ROOT}/ide/vscode"
 node --check extension.js
-npx --yes @vscode/vsce package --out "${DIST}/go-doc-vscode-$(node -p "require('./package.json').version").vsix"
+npx --yes @vscode/vsce package --no-dependencies --out "${DIST}/go-doc-vscode-$(node -p "require('./package.json').version").vsix"
 
 cd "${DIST}"
 find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 |
