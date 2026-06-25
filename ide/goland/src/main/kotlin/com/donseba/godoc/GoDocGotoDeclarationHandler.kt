@@ -21,12 +21,12 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
 
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
-        GoDocTemplateContext.typeReferenceAt(file.text, offset, index)?.let { reference ->
-            val type = index.types[reference.typeName] ?: return null
-            return targetElement(project, index, type.file, type.line, type.column)
+        val contract = index.contractForFile(project, virtualFile.path) ?: return null
+        GoDocTemplateContext.templateFunctionAt(file.text, offset, index, contract)?.let { reference ->
+            val fn = index.funcs[reference.funcName] ?: return null
+            return targetElement(project, index, fn.file, fn.line, fn.column)
         }
 
-        val contract = index.contractForFile(project, virtualFile.path) ?: return null
         val reference = GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract) ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
         val field = owner.fields[reference.memberName]

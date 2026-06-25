@@ -14,9 +14,11 @@ import (
 )
 
 type app struct {
-	mu    sync.RWMutex
-	owner User
-	todos []Todo
+	mu            sync.RWMutex
+	owner         User
+	todos         []Todo
+	templateFiles []string
+	renderer      renderer.Renderer
 }
 
 func main() {
@@ -33,8 +35,22 @@ func main() {
 }
 
 func newApp() *app {
+	templateFiles := []string{
+		"templates/main.gohtml",
+		"templates/todo_list.gohtml",
+		"templates/todo_detail.gohtml",
+	}
+	contractRenderer, err := renderer.New(renderer.Config{
+		Mode:  renderer.Development,
+		Files: templateFiles,
+	})
+	if err != nil {
+		panic(err)
+	}
 	return &app{
-		owner: User{ID: 42, Name: "Ada Lovelace", Email: "ada@example.test"},
+		owner:         User{ID: 42, Name: "Ada Lovelace", Email: "ada@example.test"},
+		templateFiles: templateFiles,
+		renderer:      contractRenderer,
 		todos: []Todo{
 			{
 				ID:          1,
@@ -135,20 +151,12 @@ func (app *app) toggleTodo(w http.ResponseWriter, r *http.Request, id int) {
 
 func (app *app) render(w http.ResponseWriter, page TodoPage) {
 	tmpl := template.New("main.gohtml")
-	if err := renderer.Register(tmpl,
-		renderer.Model("page", page),
-		renderer.Model("Page", page),
-		renderer.Model("todo", page.Selected),
-		renderer.Model("User", page.Owner),
-	); err != nil {
+	tmpl.Funcs(FuncMap)
+	if err := app.renderer.Register(tmpl, page, page.Selected, page.Owner); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if _, err := tmpl.ParseFiles(
-		"templates/main.gohtml",
-		"templates/todo_list.gohtml",
-		"templates/todo_detail.gohtml",
-	); err != nil {
+	if _, err := tmpl.ParseFiles(app.templateFiles...); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

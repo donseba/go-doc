@@ -1,25 +1,25 @@
 {{/*
-@model todo github.com/donseba/go-doc/examples/todo.Todo
+@model Todo github.com/donseba/go-doc/examples/todo.Todo
 */}}
 <aside aria-labelledby="todo-detail-title">
-    <p>{{ todo.Status }}</p>
-    <h2 id="todo-detail-title">{{ todo.Title }}</h2>
-    <p>{{ todo.Description }}</p>
+    <p>{{ Todo.Status }}</p>
+    <h2 id="todo-detail-title">{{ Todo.Title }}</h2>
+    <p>{{ Todo.Description }}</p>
 
-    <form method="post" action="/todos/{{ todo.ID }}/toggle">
+    <form method="post" action="/todos/{{ Todo.ID }}/toggle">
         <button type="submit">
-            {{ if todo.Done }}Mark open{{ else }}Mark done{{ end }}
+            {{ if Todo.Done }}Mark open{{ else }}Mark done{{ end }}
         </button>
     </form>
 
     <dl>
         <dt>Priority</dt>
-        <dd>{{ todo.Priority }}</dd>
+        <dd>{{ Todo.Priority }}</dd>
         <dt>Due</dt>
-        <dd>{{ todo.DueLabel }}</dd>
+        <dd>{{ Todo.DueLabel }}</dd>
         <dt>Tags</dt>
         <dd>
-            {{ range todo.Tags }}
+            {{ range Todo.Tags }}
                 <span>{{ . }}</span>
             {{ end }}
         </dd>

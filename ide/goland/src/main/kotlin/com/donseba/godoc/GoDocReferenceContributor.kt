@@ -43,6 +43,19 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                             )
                         }
 
+                    GoDocTemplateContext.funcReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
+                        .forEach { ref ->
+                            val fn = index.funcs[ref.funcName] ?: return@forEach
+                            references.add(
+                                GoDocPsiReference(
+                                    element = element,
+                                    absoluteStart = ref.startOffset,
+                                    absoluteEnd = ref.endOffset,
+                                    target = GoDocTarget(index.rootPath, fn.file, fn.line, fn.column),
+                                ),
+                            )
+                        }
+
                     val contract = index.contractForFile(project, virtualFile.path) ?: return references.toTypedArray()
                     GoDocTemplateContext.fieldReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index, contract)
                         .forEach { ref ->

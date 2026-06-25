@@ -32,6 +32,11 @@ type User struct {
 	Name string
 }
 
+// CurrentUser returns the active user.
+func CurrentUser() User {
+	return User{Name: "Ada"}
+}
+
 type privateState struct {
 	Token string
 }
@@ -80,6 +85,10 @@ type privateState struct {
 	if _, ok := idx.Types["example.com/app.User"]; !ok {
 		t.Fatal("unused exported structs should stay indexed for @model completion")
 	}
+	fn := idx.Funcs["example.com/app.CurrentUser"]
+	if fn.Result != "User" || fn.Signature == "" || fn.Doc == "" {
+		t.Fatalf("expected function result metadata, got %#v", fn)
+	}
 	if _, ok := idx.Types["example.com/app.privateState"]; ok {
 		t.Fatal("unexported structs should not be indexed")
 	}
@@ -87,6 +96,34 @@ type privateState struct {
 	contract := idx.Templates["templates/todos.gohtml"]
 	if contract.Models["page"] != "example.com/app.Page" {
 		t.Fatalf("@model page = %q", contract.Models["page"])
+	}
+}
+
+func TestBuildIndexScansDotContract(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "user.go", `package app
+
+type User struct {
+	Name string
+}
+`)
+	writeFile(t, root, "templates/user_row.gohtml", `{{/*
+@dot User
+*/}}
+<td>{{ .Name }}</td>
+`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed for @dot annotations")
+	}
+	contract := idx.Templates["templates/user_row.gohtml"]
+	if contract.Dot != "example.com/app.User" {
+		t.Fatalf("@dot = %q, want User", contract.Dot)
 	}
 }
 

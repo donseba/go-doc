@@ -12,17 +12,18 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
 
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
-        GoDocTemplateContext.typeReferenceAt(file.text, source.textOffset, index)?.let { reference ->
-            val type = index.types[reference.typeName] ?: return null
-            val doc = type.doc.ifBlank { "No type documentation found in the Go source." }
+        val contract = index.contractForFile(project, virtualFile.path) ?: return null
+        GoDocTemplateContext.templateFunctionAt(file.text, source.textOffset, index, contract)?.let { reference ->
+            val fn = index.funcs[reference.funcName] ?: return null
+            val signature = fn.signature.ifBlank { "func ${fn.name}" }
+            val doc = fn.doc.ifBlank { "No function documentation found in the Go source." }
             return """
-                <div class="definition"><b>${escape(type.name)}</b></div>
+                <div class="definition"><b>${escape(fn.name)}</b> <code>${escape(signature)}</code></div>
                 <div class="content">${escape(doc).replace("\n", "<br/>")}</div>
-                <div class="sections"><p>${escape(type.fqName)}</p></div>
+                <div class="sections"><p>${escape(fn.fqName)}</p></div>
             """.trimIndent()
         }
 
-        val contract = index.contractForFile(project, virtualFile.path) ?: return null
         val reference = GoDocTemplateContext.fieldReferenceAt(file.text, source.textOffset, index, contract) ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
         owner.fields[reference.memberName]?.let { field ->
@@ -54,12 +55,12 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
 
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
-        GoDocTemplateContext.typeReferenceAt(file.text, source.textOffset, index)?.let { reference ->
-            val type = index.types[reference.typeName] ?: return null
-            return "${type.name} ${type.fqName}"
+        val contract = index.contractForFile(project, virtualFile.path) ?: return null
+        GoDocTemplateContext.templateFunctionAt(file.text, source.textOffset, index, contract)?.let { reference ->
+            val fn = index.funcs[reference.funcName] ?: return null
+            return "${fn.name} ${fn.signature.ifBlank { fn.fqName }}".trim()
         }
 
-        val contract = index.contractForFile(project, virtualFile.path) ?: return null
         val reference = GoDocTemplateContext.fieldReferenceAt(file.text, source.textOffset, index, contract) ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
         owner.fields[reference.memberName]?.let { field ->

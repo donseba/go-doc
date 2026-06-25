@@ -13,6 +13,12 @@ data class GoDocTypeReference(
     val endOffset: Int,
 )
 
+data class GoDocFuncReference(
+    val funcName: String,
+    val startOffset: Int,
+    val endOffset: Int,
+)
+
 object GoDocTemplateContext {
     fun fieldReferenceAt(
         text: String,
@@ -24,11 +30,20 @@ object GoDocTemplateContext {
         val parts = token.text.split('.').filter { it.isNotBlank() }
         if (parts.isEmpty()) return null
 
+        val scopedModel = token.text.startsWith("_.") && parts.firstOrNull() == "_"
+        val parenthesizedRoot = if (token.text.startsWith(".")) {
+            parenthesizedRootBefore(text, token.startOffset, index, contract)
+        } else {
+            null
+        }
         val rootType = when {
-            token.text.startsWith("_") || token.text.startsWith("$") -> contract.models[parts.first()]
+            parenthesizedRoot != null -> parenthesizedRoot
+            scopedModel -> parts.getOrNull(1)?.let { contract.models[it] }
+            token.text.startsWith("$") -> contract.models[parts.first()]
                 ?: scopedVariablesAt(text, offset, index, contract)[parts.first()]
             token.text.startsWith(".") -> dotTypeAt(text, offset, index, contract)
             else -> contract.models[parts.first()]
+                ?: index.resolveExpressionType(contract, parts.first())
         } ?: return null
 
         val fieldName = parts.last()
@@ -45,6 +60,8 @@ object GoDocTemplateContext {
 
         val ownerPath = if (token.text.startsWith(".")) {
             parts.dropLast(1)
+        } else if (scopedModel) {
+            parts.drop(2).dropLast(1)
         } else {
             parts.drop(1).dropLast(1)
         }
@@ -57,13 +74,81 @@ object GoDocTemplateContext {
         )
     }
 
+    private fun parenthesizedRootBefore(
+        text: String,
+        dotStart: Int,
+        index: GoDocIndex,
+        contract: TemplateContract,
+    ): String? {
+        if (dotStart <= 0 || dotStart > text.length || text[dotStart - 1] != ')') return null
+        val open = matchingOpenParen(text, dotStart - 1)
+        if (open < 0) return null
+        val actionStart = text.substring(0, open).lastIndexOf("{{")
+        val actionEnd = text.substring(0, open).lastIndexOf("}}")
+        if (actionStart < 0 || actionEnd > actionStart) return null
+        val inner = text.substring(open + 1, dotStart - 1).trim()
+        if (inner.isBlank()) return null
+        return index.resolveExpressionType(contract, inner)
+    }
+
+    private fun matchingOpenParen(text: String, close: Int): Int {
+        if (close !in text.indices || text[close] != ')') return -1
+        var depth = 0
+        var inQuote = false
+        var escaped = false
+        for (index in close downTo 0) {
+            val ch = text[index]
+            when {
+                escaped -> escaped = false
+                ch == '\\' -> escaped = true
+                ch == '"' -> inQuote = !inQuote
+                inQuote -> Unit
+                ch == ')' -> depth++
+                ch == '(' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        return -1
+    }
+
     fun typeReferenceAt(text: String, offset: Int, index: GoDocIndex): GoDocTypeReference? {
-        for (match in modelTypePattern.findAll(text)) {
+        for (match in typeMatches(text)) {
             val range = match.groups[1]?.range ?: continue
             if (offset < range.first || offset > range.last + 1) continue
             val raw = match.groupValues[1]
             val resolved = index.resolveGoType(raw) ?: raw.takeIf { index.types.containsKey(it) } ?: return null
-            return GoDocTypeReference(resolved, range.first, range.last + 1)
+            val shortStart = range.first + raw.length - raw.substringAfterLast('.').length
+            if (offset < shortStart) return null
+            return GoDocTypeReference(resolved, shortStart, range.last + 1)
+        }
+        return null
+    }
+
+    fun templateFunctionAt(
+        text: String,
+        offset: Int,
+        index: GoDocIndex,
+        contract: TemplateContract,
+    ): GoDocFuncReference? {
+        for (match in templateActionPattern.findAll(text)) {
+            val actionRange = match.range
+            if (offset < actionRange.first || offset > actionRange.last + 1) continue
+            val actionText = match.value
+            val open = actionText.indexOf("{{")
+            if (open < 0) return null
+            var start = open + 2
+            while (start < actionText.length && (actionText[start] == '-' || actionText[start].isWhitespace())) start++
+            val end = actionText.indexOfFirstFrom(start) { isTokenChar(it) }
+            if (end <= start) return null
+            val name = actionText.substring(start, end)
+            val fnName = contract.funcs[name] ?: return null
+            if (!index.funcs.containsKey(fnName)) return null
+            val absoluteStart = actionRange.first + start
+            val absoluteEnd = actionRange.first + end
+            if (offset < absoluteStart || offset > absoluteEnd) return null
+            return GoDocFuncReference(fnName, absoluteStart, absoluteEnd)
         }
         return null
     }
@@ -78,6 +163,7 @@ object GoDocTemplateContext {
         return tokenPattern.findAll(text, startOffset)
             .takeWhile { it.range.first < endOffset }
             .mapNotNull { match ->
+                if (inQuotedString(text, match.range.first)) return@mapNotNull null
                 val token = match.value
                 if (!token.contains('.') && contract.models[token] == null) return@mapNotNull null
                 val middle = match.range.first + token.length / 2
@@ -88,16 +174,71 @@ object GoDocTemplateContext {
     }
 
     fun typeReferencesInRange(text: String, startOffset: Int, endOffset: Int, index: GoDocIndex): List<GoDocTypeReference> {
-        return modelTypePattern.findAll(text, startOffset)
+        return typeMatches(text, startOffset).asSequence()
             .takeWhile { (it.groups[1]?.range?.first ?: Int.MAX_VALUE) < endOffset }
             .mapNotNull { match ->
                 val range = match.groups[1]?.range ?: return@mapNotNull null
                 if (range.last + 1 <= startOffset || range.first >= endOffset) return@mapNotNull null
                 val raw = match.groupValues[1]
                 val resolved = index.resolveGoType(raw) ?: raw.takeIf { index.types.containsKey(it) } ?: return@mapNotNull null
-                GoDocTypeReference(resolved, range.first, range.last + 1)
+                val shortStart = range.first + raw.length - raw.substringAfterLast('.').length
+                if (shortStart >= endOffset || range.last + 1 <= startOffset) return@mapNotNull null
+                GoDocTypeReference(resolved, shortStart, range.last + 1)
             }
             .toList()
+    }
+
+    private fun typeMatches(text: String, startOffset: Int = 0): List<MatchResult> {
+        return typePatterns
+            .flatMap { it.findAll(text, startOffset) }
+            .sortedBy { it.groups[1]?.range?.first ?: Int.MAX_VALUE }
+    }
+
+    fun funcReferencesInRange(text: String, startOffset: Int, endOffset: Int, index: GoDocIndex): List<GoDocFuncReference> {
+        val refs = mutableListOf<GoDocFuncReference>()
+        refs.addAll(funcTypePattern.findAll(text, startOffset)
+            .takeWhile { (it.groups[1]?.range?.first ?: Int.MAX_VALUE) < endOffset }
+            .mapNotNull { match ->
+                val range = match.groups[1]?.range ?: return@mapNotNull null
+                if (range.last + 1 <= startOffset || range.first >= endOffset) return@mapNotNull null
+                val raw = match.groupValues[1]
+                val normalized = normalizeType(raw)
+                if (!index.funcs.containsKey(normalized)) return@mapNotNull null
+                val shortStart = range.first + raw.length - raw.substringAfterLast('.').length
+                GoDocFuncReference(normalized, shortStart, range.last + 1)
+            })
+
+        val contract = contractForText(text, index)
+        if (contract != null) {
+            for (match in templateActionPattern.findAll(text, startOffset)) {
+                val range = match.range
+                if (range.first >= endOffset) break
+                if (range.last + 1 <= startOffset) continue
+                templateFunctionAt(text, range.first + 2, index, contract)?.let { ref ->
+                    if (ref.startOffset < endOffset && ref.endOffset > startOffset) {
+                        refs.add(ref)
+                    }
+                }
+            }
+        }
+        return refs.distinctBy { "${it.startOffset}:${it.endOffset}:${it.funcName}" }
+    }
+
+    private fun contractForText(text: String, index: GoDocIndex): TemplateContract? {
+        val models = modelContractPattern.findAll(text).associate { match ->
+            val name = match.groupValues[1]
+            val rawType = match.groupValues[2]
+            name to (index.resolveGoType(rawType) ?: rawType)
+        }
+        val dot = dotContractPattern.find(text)?.let { match ->
+            val rawType = normalizeType(match.groupValues[1])
+            index.resolveGoType(rawType) ?: rawType
+        }.orEmpty()
+        val funcs = funcContractPattern.findAll(text).associate { match ->
+            match.groupValues[1] to normalizeType(match.groupValues[2])
+        }
+        if (models.isEmpty() && dot.isEmpty() && funcs.isEmpty()) return null
+        return TemplateContract(models = models, dot = dot, funcs = funcs)
     }
 
     private fun dotTypeAt(text: String, offset: Int, index: GoDocIndex, contract: TemplateContract): String? {
@@ -114,7 +255,7 @@ object GoDocTemplateContext {
     }
 
     private fun scopeAt(text: String, offset: Int, index: GoDocIndex, contract: TemplateContract): ScopeInfo {
-        val stack = mutableListOf(ScopeInfo(dotType = null, vars = emptyMap()))
+        val stack = mutableListOf(ScopeInfo(dotType = contract.dot.ifBlank { null }, vars = emptyMap()))
         val beforeCaret = text.substring(0, offset.coerceIn(0, text.length))
 
         for (match in actionPattern.findAll(beforeCaret)) {
@@ -174,6 +315,36 @@ object GoDocTemplateContext {
         return char == '$' || char == '_' || char == '.' || char.isLetterOrDigit()
     }
 
+    private fun String.indexOfFirstFrom(start: Int, predicate: (Char) -> Boolean): Int {
+        var index = start
+        while (index < length && predicate(this[index])) index++
+        return index
+    }
+
+    private fun inQuotedString(text: String, offset: Int): Boolean {
+        var inQuote = false
+        var escaped = false
+        for (index in 0 until offset.coerceIn(0, text.length)) {
+            val char = text[index]
+            when {
+                escaped -> escaped = false
+                char == '\\' -> escaped = true
+                char == '"' -> inQuote = !inQuote
+            }
+        }
+        return inQuote
+    }
+
+    private fun normalizeType(typeExpr: String): String {
+        val lastSlash = typeExpr.lastIndexOf('/')
+        val lastDot = typeExpr.lastIndexOf('.')
+        return if (lastSlash > lastDot) {
+            typeExpr.substring(0, lastSlash) + "." + typeExpr.substring(lastSlash + 1)
+        } else {
+            typeExpr
+        }
+    }
+
     private data class ScopeInfo(
         val dotType: String?,
         val vars: Map<String, String>,
@@ -191,7 +362,14 @@ object GoDocTemplateContext {
     }
 
     private val actionPattern = Regex("""\{\{\s*(?:-)?\s*(range|with|end)\b([^}]*)\}\}""")
+    private val templateActionPattern = Regex("""\{\{\s*(?:-)?\s*[^}]*\}\}""")
+    private val modelContractPattern = Regex("""(?m)^\s*@model\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
+    private val dotContractPattern = Regex("""(?m)^\s*@dot\s+([A-Za-z0-9_./\-]+)""")
+    private val funcContractPattern = Regex("""(?m)^\s*@func\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
     private val modelTypePattern = Regex("""@model\s+[\u0024A-Za-z][A-Za-z0-9_]*\s+([A-Za-z0-9_./\-]+)""")
+    private val dotTypePattern = Regex("""@dot\s+([A-Za-z0-9_./\-]+)""")
+    private val typePatterns = listOf(modelTypePattern, dotTypePattern)
+    private val funcTypePattern = Regex("""@func\s+[\u0024A-Za-z][A-Za-z0-9_]*\s+([A-Za-z0-9_./\-]+)""")
     private val modelDeclarationPattern = Regex("""@model\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+[A-Za-z0-9_./\-]+""")
     private val tokenPattern = Regex("""[\u0024_A-Za-z][\u0024_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)*|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*""")
 }

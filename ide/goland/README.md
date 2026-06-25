@@ -34,9 +34,9 @@ Add a template contract:
 
 ```gotemplate
 {{/*
-@model page github.com/example/app.Page
+@model Page github.com/example/app.Page
 */}}
-{{ _page.Title }}
+{{ Page.Title }}
 ```
 
 The language server also builds an in-memory index when no generated file exists.

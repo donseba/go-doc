@@ -9,7 +9,9 @@ three files:
 
 Each template declares the model it uses with `@model`, so editor integrations
 can provide completion, diagnostics, hover, and navigation in the file you are
-editing.
+editing. Runtime rendering uses `renderer.RegisterFromFiles`, which scans those
+declarations and exposes the matched values through the declared model names,
+for example `{{ Page.Title }}`.
 
 The app exposes:
 

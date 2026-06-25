@@ -1,0 +1,58 @@
+{{/*
+@model Page github.com/donseba/go-doc/examples/table.UserTablePage
+@func firstUser github.com/donseba/go-doc/examples/table.FirstUser
+@func activeUsers github.com/donseba/go-doc/examples/table.ActiveUsers
+@func userByID github.com/donseba/go-doc/examples/table.UserByID
+*/}}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{{ Page.Title }}</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5; color: #1c1917; }
+        table { border-collapse: separate; border-spacing: 0; min-width: 42rem; border: 1px solid #d6d3d1; border-radius: .5rem; overflow: hidden; }
+        th, td { padding: .75rem 1rem; text-align: left; border-bottom: 1px solid #e7e5e4; }
+        tbody tr:last-child td { border-bottom: 0; }
+        th { background: #f5f5f4; }
+        code { background: #f5f5f4; border-radius: .25rem; padding: .1rem .3rem; }
+    </style>
+</head>
+<body>
+    <header>
+        <p>go-doc table example</p>
+        <h1>{{ Page.Title }}</h1>
+        <p>The parent receives <code>[]User</code>, ranges over it, and passes each row into a subtemplate.</p>
+        {{ with firstUser }}
+            <p>First typed function result: {{ .Name }} ({{ .Status }})</p>
+        {{ end }}
+        <p>Parenthesized function result: {{ (userByID 2).Email }}</p>
+    </header>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ range Page.Users }}
+                {{ template "user_row.gohtml" . }}
+            {{ end }}
+        </tbody>
+    </table>
+
+    <section>
+        <h2>Active users from a function</h2>
+        <ul>
+            {{ range activeUsers }}
+                <li>{{ .Name }} - {{ .Email }}</li>
+            {{ end }}
+        </ul>
+    </section>
+</body>
+</html>

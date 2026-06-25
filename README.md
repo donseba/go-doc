@@ -12,12 +12,12 @@ to editors through a small Language Server Protocol server.
 
 ```gotemplate
 {{/*
-@model page github.com/example/app.Page
+@model Page github.com/example/app.Page
 */}}
 
-<h1>{{ page.Title }}</h1>
+<h1>{{ Page.Title }}</h1>
 
-{{ range page.Items }}
+{{ range Page.Items }}
     <a href="/items/{{ .ID }}">{{ .Label }}</a>
 {{ end }}
 ```
@@ -29,7 +29,7 @@ back to Go source.
 ## Why
 
 Go templates are intentionally simple at runtime, but that usually means the
-editor has no idea what `{{ .Title }}` or `{{ page.Items }}` refers to.
+editor has no idea what `{{ .Title }}` or `{{ Page.Items }}` refers to.
 
 `go-doc` keeps runtime behavior unchanged. Your application still owns template
 parsing, execution, routing, rendering, and data. `go-doc` only adds a typed
@@ -86,17 +86,19 @@ Use the model in a template:
 
 ```gotemplate
 {{/*
-@model todo github.com/example/app.Todo
+@model Todo github.com/example/app.Todo
 */}}
 
 <article>
-    <h2>{{ todo.Title }}</h2>
-    <p>{{ todo.Priority }}</p>
+    <h2>{{ Todo.Title }}</h2>
+    <p>{{ Todo.Priority }}</p>
 </article>
 ```
 
-The model name is the accessor name. `@model todo ...` is used as
-`{{ todo.Title }}`. If you declare `@model _ ...`, the accessor is `{{ _ }}`.
+The declared model name is the template accessor. `@model Todo ...` is used as
+`{{ Todo.Title }}`. Capitalized model names are recommended because they read
+like Go types and avoid common template helper names, but lowercase names are
+not forbidden.
 
 ## Configuration
 
@@ -140,11 +142,32 @@ change how your application renders HTML.
 
 For projects that want the annotated model names available during ordinary
 `html/template` parsing, the repository includes a small `renderer` package. It
-registers model names on a template so this works naturally:
+can scan the same template declarations, match them to the Go values you pass,
+and register the declared model accessors before parsing:
 
-```gotemplate
-{{ page.Title }}
+Create one renderer for a template set. Use `renderer.Development` while
+editing templates, or `renderer.Production` when you want contracts scanned once
+at startup:
+
+```go
+views, err := renderer.New(renderer.Config{
+    Mode:  renderer.Development,
+    Files: []string{"templates/page.gohtml"},
+})
 ```
+
+The render path stays the same in both modes:
+
+```go
+tmpl := template.New("page.gohtml")
+err := views.Register(tmpl, page)
+_, err = tmpl.ParseFiles("templates/page.gohtml")
+```
+
+Development mode re-reads `@model` declarations on each `Register` call, so
+template-side renames are picked up without restarting. Production mode reads
+the declarations once in `renderer.New`, avoiding repeated file reads and
+keeping the render path predictable.
 
 The standalone example in `examples/standalone` shows this without depending on
 `go-partial`.

@@ -88,7 +88,7 @@ Template contracts use `@model`:
 
 ```gotemplate
 {{/*
-@model page github.com/example/app.Page
+@model Page github.com/example/app.Page
 */}}
-{{ _page.Title }}
+{{ Page.Title }}
 ```

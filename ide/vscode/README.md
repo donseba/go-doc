@@ -5,7 +5,7 @@ VS Code integration for typed Go templates powered by `go-doc lsp`.
 ## Features
 
 - completions for `@model` Go type names
-- completions for typed template model names such as `page.`
+- completions for typed template model names such as `Page.`
 - completions for dot context inside `range` blocks
 - completions for exported fields and methods
 - diagnostics for unknown model names and fields
@@ -41,9 +41,9 @@ Add a template contract:
 
 ```gotemplate
 {{/*
-@model page github.com/example/app.Page
+@model Page github.com/example/app.Page
 */}}
-{{ _page.Title }}
+{{ Page.Title }}
 ```
 
 ## Commands

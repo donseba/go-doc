@@ -4,12 +4,18 @@
   "templates": {
     "templates/main.gohtml": {
       "models": {
-        "page": "github.com/donseba/go-doc/examples/todo.TodoPage"
+        "Page": "github.com/donseba/go-doc/examples/todo.TodoPage"
+      },
+      "funcs": {
+        "add": "github.com/donseba/go-doc/examples/todo.Add",
+        "div": "github.com/donseba/go-doc/examples/todo.Div",
+        "mul": "github.com/donseba/go-doc/examples/todo.Mul",
+        "sub": "github.com/donseba/go-doc/examples/todo.Sub"
       }
     },
     "templates/todo_detail.gohtml": {
       "models": {
-        "todo": "github.com/donseba/go-doc/examples/todo.Todo"
+        "Todo": "github.com/donseba/go-doc/examples/todo.Todo"
       }
     },
     "templates/todo_list.gohtml": {
@@ -229,6 +235,60 @@
           "column": 15
         }
       }
+    }
+  },
+  "funcs": {
+    "github.com/donseba/go-doc/examples/todo.Add": {
+      "name": "Add",
+      "package": "github.com/donseba/go-doc/examples/todo",
+      "file": "functions.go",
+      "line": 13,
+      "column": 6,
+      "doc": "Add returns the sum of two integers.",
+      "signature": "func(x, y int) int",
+      "params": [
+        "int",
+        "int"
+      ]
+    },
+    "github.com/donseba/go-doc/examples/todo.Div": {
+      "name": "Div",
+      "package": "github.com/donseba/go-doc/examples/todo",
+      "file": "functions.go",
+      "line": 23,
+      "column": 6,
+      "doc": "Div divides x with y",
+      "signature": "func(x, y int) int",
+      "params": [
+        "int",
+        "int"
+      ]
+    },
+    "github.com/donseba/go-doc/examples/todo.Mul": {
+      "name": "Mul",
+      "package": "github.com/donseba/go-doc/examples/todo",
+      "file": "functions.go",
+      "line": 28,
+      "column": 6,
+      "doc": "Mul multiplies x with y",
+      "signature": "func(x, y int) int",
+      "params": [
+        "int",
+        "int"
+      ]
+    },
+    "github.com/donseba/go-doc/examples/todo.Sub": {
+      "name": "Sub",
+      "package": "github.com/donseba/go-doc/examples/todo",
+      "file": "functions.go",
+      "line": 18,
+      "column": 6,
+      "doc": "Sub subtract returns the difference of two integers.",
+      "signature": "func(x, y int) int",
+      "params": [
+        "int",
+        "int"
+      ]
     }
   },
   "short": {

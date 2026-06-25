@@ -30,6 +30,8 @@ type (
 
 	templateIndex struct {
 		Models map[string]string `json:"models"`
+		Dot    string            `json:"dot,omitempty"`
+		Funcs  map[string]string `json:"funcs,omitempty"`
 	}
 
 	goTypeIndex struct {
@@ -61,12 +63,15 @@ type (
 	}
 
 	goFuncIndex struct {
-		Name    string `json:"name"`
-		Package string `json:"package"`
-		File    string `json:"file"`
-		Line    int    `json:"line,omitempty"`
-		Column  int    `json:"column,omitempty"`
-		Doc     string `json:"doc,omitempty"`
+		Name      string   `json:"name"`
+		Package   string   `json:"package"`
+		File      string   `json:"file"`
+		Line      int      `json:"line,omitempty"`
+		Column    int      `json:"column,omitempty"`
+		Doc       string   `json:"doc,omitempty"`
+		Result    string   `json:"result,omitempty"`
+		Signature string   `json:"signature,omitempty"`
+		Params    []string `json:"params,omitempty"`
 	}
 
 	problem struct {
@@ -82,7 +87,39 @@ type (
 
 var (
 	modelPattern = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+	dotPattern   = regexp.MustCompile(`(?m)^\s*@dot\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+	funcPattern  = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
 )
+
+var reservedTemplateNames = map[string]bool{
+	"and":      true,
+	"block":    true,
+	"call":     true,
+	"define":   true,
+	"else":     true,
+	"end":      true,
+	"eq":       true,
+	"ge":       true,
+	"gt":       true,
+	"html":     true,
+	"if":       true,
+	"index":    true,
+	"js":       true,
+	"le":       true,
+	"len":      true,
+	"lt":       true,
+	"ne":       true,
+	"not":      true,
+	"or":       true,
+	"print":    true,
+	"printf":   true,
+	"println":  true,
+	"range":    true,
+	"slice":    true,
+	"template": true,
+	"urlquery": true,
+	"with":     true,
+}
 
 func Main() {
 	if err := Run(os.Args[1:]); err != nil {
@@ -324,12 +361,15 @@ func scanGoTypes(root, module string, cfg indexConfig, idx *indexFile) error {
 			}
 			fullName := importPath + "." + fn.Name.Name
 			idx.Funcs[fullName] = goFuncIndex{
-				Name:    fn.Name.Name,
-				Package: importPath,
-				File:    rel(root, path),
-				Line:    position.Line,
-				Column:  position.Column,
-				Doc:     docText(fn.Doc),
+				Name:      fn.Name.Name,
+				Package:   importPath,
+				File:      rel(root, path),
+				Line:      position.Line,
+				Column:    position.Column,
+				Doc:       docText(fn.Doc),
+				Result:    resultType(fileSet, fn.Type),
+				Signature: funcSignature(fileSet, fn.Type),
+				Params:    paramTypes(fileSet, fn.Type),
 			}
 		}
 
@@ -362,12 +402,16 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 
 		src := string(data)
 		models := parseModels(src)
-		if len(models) == 0 {
+		dot := parseDot(src)
+		funcs := parseFuncs(src)
+		if len(models) == 0 && dot == "" && len(funcs) == 0 {
 			return nil
 		}
 
 		idx.Templates[rel(root, path)] = templateIndex{
 			Models: models,
+			Dot:    dot,
+			Funcs:  funcs,
 		}
 		return nil
 	})
@@ -379,6 +423,22 @@ func parseModels(src string) map[string]string {
 		models[match[1]] = normalizeType(match[2])
 	}
 	return models
+}
+
+func parseDot(src string) string {
+	match := dotPattern.FindStringSubmatch(src)
+	if len(match) != 2 {
+		return ""
+	}
+	return normalizeType(match[1])
+}
+
+func parseFuncs(src string) map[string]string {
+	funcs := make(map[string]string)
+	for _, match := range funcPattern.FindAllStringSubmatch(src, -1) {
+		funcs[match[1]] = normalizeType(match[2])
+	}
+	return funcs
 }
 
 func normalizeType(typ string) string {
@@ -393,6 +453,10 @@ func normalizeType(typ string) string {
 func validateTemplateTypes(idx *indexFile) {
 	for file, tmpl := range idx.Templates {
 		for name, typ := range tmpl.Models {
+			if reservedTemplateNames[name] {
+				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@model %s uses a reserved template name", name)})
+				continue
+			}
 			if _, ok := idx.Types[typ]; ok {
 				continue
 			}
@@ -407,12 +471,35 @@ func validateTemplateTypes(idx *indexFile) {
 				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@model %s type %q is ambiguous: %s", name, typ, strings.Join(matches, ", "))})
 			}
 		}
+		if tmpl.Dot != "" {
+			if _, ok := idx.Types[tmpl.Dot]; !ok {
+				matches := idx.Short[tmpl.Dot]
+				switch len(matches) {
+				case 0:
+					idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@dot references unknown type %q", tmpl.Dot)})
+				case 1:
+					tmpl.Dot = matches[0]
+					idx.Templates[file] = tmpl
+				default:
+					idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@dot type %q is ambiguous: %s", tmpl.Dot, strings.Join(matches, ", "))})
+				}
+			}
+		}
+		for name, fn := range tmpl.Funcs {
+			if reservedTemplateNames[name] {
+				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@func %s uses a reserved template name", name)})
+				continue
+			}
+			if _, ok := idx.Funcs[fn]; !ok {
+				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@func %s references unknown function %q", name, fn)})
+			}
+		}
 	}
 }
 
 func hasTemplateModels(idx indexFile) bool {
 	for _, tmpl := range idx.Templates {
-		if len(tmpl.Models) > 0 {
+		if len(tmpl.Models) > 0 || tmpl.Dot != "" {
 			return true
 		}
 	}
@@ -477,6 +564,24 @@ func resultType(fileSet *token.FileSet, fn *ast.FuncType) string {
 
 func funcSignature(fileSet *token.FileSet, fn *ast.FuncType) string {
 	return exprString(fileSet, fn)
+}
+
+func paramTypes(fileSet *token.FileSet, fn *ast.FuncType) []string {
+	if fn.Params == nil || len(fn.Params.List) == 0 {
+		return nil
+	}
+	params := make([]string, 0, len(fn.Params.List))
+	for _, field := range fn.Params.List {
+		typeName := exprString(fileSet, field.Type)
+		if len(field.Names) == 0 {
+			params = append(params, typeName)
+			continue
+		}
+		for range field.Names {
+			params = append(params, typeName)
+		}
+	}
+	return params
 }
 
 func docText(group *ast.CommentGroup) string {
