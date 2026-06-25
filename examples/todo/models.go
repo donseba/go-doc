@@ -20,6 +20,15 @@ type User struct {
 	Email string
 }
 
+func (u User) Todos() []Todo {
+	// In a real application, this would query a database or other data source.
+	// Here we just return a static list of todos for demonstration purposes.
+	return []Todo{
+		{ID: 1, Title: "Buy groceries", Description: "Milk, Bread, Eggs", Priority: "High", Done: false, DueAt: time.Now().Add(24 * time.Hour), Tags: []string{"shopping", "errands"}},
+		{ID: 2, Title: "Read book", Description: "Finish reading 'The Go Programming Language'", Priority: "Medium", Done: true, DueAt: time.Now().Add(48 * time.Hour), Tags: []string{"reading", "learning"}},
+	}
+}
+
 // Todo is one task in the todo list.
 type Todo struct {
 	ID          int
@@ -29,6 +38,8 @@ type Todo struct {
 	Done        bool
 	DueAt       time.Time
 	Tags        []string
+
+	Un string
 }
 
 // Status returns the display status for the todo.
@@ -42,4 +53,16 @@ func (t Todo) Status() string {
 // DueLabel formats the due date for templates.
 func (t Todo) DueLabel() string {
 	return t.DueAt.Format("2 Jan 2006")
+}
+
+type Test struct {
+	FieldA string
+	FieldB string
+
+	FieldC string
+
+	FieldD string
+	FieldE string
+
+	FieldF string
 }

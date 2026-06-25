@@ -12,6 +12,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <notificationGroup id="go-doc" displayType="BALLOON"/>
         <platform.lsp.serverSupportProvider implementation="com.donseba.godoc.GoDocLspServerSupportProvider"/>
+        <psi.referenceContributor implementation="com.donseba.godoc.GoDocReferenceContributor"/>
         <gotoDeclarationHandler implementation="com.donseba.godoc.GoDocGotoDeclarationHandler"/>
         <documentationProvider implementation="com.donseba.godoc.GoDocDocumentationProvider"/>
         <postStartupActivity implementation="com.donseba.godoc.GoDocStartupActivity"/>

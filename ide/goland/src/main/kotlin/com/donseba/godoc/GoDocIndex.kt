@@ -52,7 +52,6 @@ data class GoDocFunc(
 
 data class TemplateContract(
     val models: Map<String, String>,
-    val accessors: Map<String, String>,
 )
 
 class GoDocIndex(
@@ -236,13 +235,11 @@ class GoDocIndex(
 
             jsonObject(root, "templates")?.entrySet()?.forEach { (path, element) ->
                 val obj = element.asJsonObjectOrNull() ?: return@forEach
-                val models = jsonObject(obj, "models")?.entrySet()?.associate { (name, value) ->
+                val modelsObject = jsonObject(obj, "models")
+                val models = modelsObject?.entrySet()?.associate { (name, value) ->
                     name to value.asString
                 } ?: emptyMap()
-                val accessors = jsonObject(obj, "accessors")?.entrySet()?.associate { (name, value) ->
-                    name to value.asString
-                } ?: emptyMap()
-                templates[path] = TemplateContract(models = models, accessors = accessors)
+                templates[path] = TemplateContract(models = models)
             }
 
             jsonObject(root, "funcs")?.entrySet()?.forEach { (fqName, element) ->
@@ -324,10 +321,10 @@ class GoDocIndex(
 
         val root = parts.first()
         val rootType = when {
-            root.startsWith("_") -> contract.accessors[root]
-            root.startsWith("$") -> contract.accessors[root]
+            root.startsWith("_") -> contract.models[root]
+            root.startsWith("$") -> contract.models[root]
             clean.startsWith(".") -> dotType
-            else -> null
+            else -> contract.models[root]
         } ?: return null
 
         return resolveFieldValuePath(rootType, parts.drop(1))

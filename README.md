@@ -15,9 +15,9 @@ to editors through a small Language Server Protocol server.
 @model page github.com/example/app.Page
 */}}
 
-<h1>{{ _page.Title }}</h1>
+<h1>{{ page.Title }}</h1>
 
-{{ range _page.Items }}
+{{ range page.Items }}
     <a href="/items/{{ .ID }}">{{ .Label }}</a>
 {{ end }}
 ```
@@ -29,7 +29,7 @@ back to Go source.
 ## Why
 
 Go templates are intentionally simple at runtime, but that usually means the
-editor has no idea what `{{ .Title }}` or `{{ _page.Items }}` refers to.
+editor has no idea what `{{ .Title }}` or `{{ page.Items }}` refers to.
 
 `go-doc` keeps runtime behavior unchanged. Your application still owns template
 parsing, execution, routing, rendering, and data. `go-doc` only adds a typed
@@ -37,13 +37,15 @@ contract that editors and tools can understand.
 
 ## Features
 
-- Typeahead for declared template models, accessors, exported fields, and
+- Typeahead for declared template models, built-in template functions, exported fields, and
   exported methods.
 - Dot-context completion inside `range` and `with` blocks.
-- Diagnostics for unknown models, accessors, fields, and invalid `range`
+- Diagnostics for unknown model names, fields, and invalid `range`
   sources.
+- Quick fixes for creating missing model structs and adding missing struct
+  fields from template diagnostics.
 - Hover and go-to-definition for model types, fields, and methods.
-- Semantic highlighting for model types, accessors, fields, and methods.
+- Semantic highlighting for model types, model names, built-in functions, fields, and methods.
 - A shared LSP core used by GoLand, VS Code, Sublime Text, Vim, and Neovim.
 - Optional `.go-doc/index.json` generation for editor refreshes and tool
   interoperability.
@@ -88,13 +90,13 @@ Use the model in a template:
 */}}
 
 <article>
-    <h2>{{ _todo.Title }}</h2>
-    <p>{{ _todo.Priority }}</p>
+    <h2>{{ todo.Title }}</h2>
+    <p>{{ todo.Priority }}</p>
 </article>
 ```
 
-The model name becomes an accessor by prefixing it with `_`, so `todo` becomes
-`_todo`.
+The model name is the accessor name. `@model todo ...` is used as
+`{{ todo.Title }}`. If you declare `@model _ ...`, the accessor is `{{ _ }}`.
 
 ## Configuration
 
@@ -136,12 +138,12 @@ server can refresh its state.
 `go-doc` does not require a framework. It does not execute your templates or
 change how your application renders HTML.
 
-For projects that want the annotated accessors available during ordinary
+For projects that want the annotated model names available during ordinary
 `html/template` parsing, the repository includes a small `renderer` package. It
-registers model accessors on a template so this works naturally:
+registers model names on a template so this works naturally:
 
 ```gotemplate
-{{ _page.Title }}
+{{ page.Title }}
 ```
 
 The standalone example in `examples/standalone` shows this without depending on

@@ -5,77 +5,120 @@
     "templates/main.gohtml": {
       "models": {
         "page": "github.com/donseba/go-doc/examples/todo.TodoPage"
-      },
-      "accessors": {
-        "_page": "github.com/donseba/go-doc/examples/todo.TodoPage"
       }
     },
     "templates/todo_detail.gohtml": {
       "models": {
         "todo": "github.com/donseba/go-doc/examples/todo.Todo"
-      },
-      "accessors": {
-        "_todo": "github.com/donseba/go-doc/examples/todo.Todo"
       }
     },
     "templates/todo_list.gohtml": {
       "models": {
-        "page": "github.com/donseba/go-doc/examples/todo.TodoPage"
-      },
-      "accessors": {
-        "_page": "github.com/donseba/go-doc/examples/todo.TodoPage"
+        "Page": "github.com/donseba/go-doc/examples/todo.TodoPage",
+        "User": "github.com/donseba/go-doc/examples/todo.User"
       }
     }
   },
   "types": {
+    "github.com/donseba/go-doc/examples/todo.Test": {
+      "name": "Test",
+      "package": "github.com/donseba/go-doc/examples/todo",
+      "file": "models.go",
+      "line": 58,
+      "column": 6,
+      "fields": {
+        "FieldA": {
+          "type": "string",
+          "file": "models.go",
+          "line": 59,
+          "column": 2
+        },
+        "FieldB": {
+          "type": "string",
+          "file": "models.go",
+          "line": 60,
+          "column": 2
+        },
+        "FieldC": {
+          "type": "string",
+          "file": "models.go",
+          "line": 62,
+          "column": 2
+        },
+        "FieldD": {
+          "type": "string",
+          "file": "models.go",
+          "line": 64,
+          "column": 2
+        },
+        "FieldE": {
+          "type": "string",
+          "file": "models.go",
+          "line": 65,
+          "column": 2
+        },
+        "FieldF": {
+          "type": "string",
+          "file": "models.go",
+          "line": 67,
+          "column": 2
+        }
+      }
+    },
     "github.com/donseba/go-doc/examples/todo.Todo": {
       "name": "Todo",
       "package": "github.com/donseba/go-doc/examples/todo",
       "file": "models.go",
-      "line": 24,
+      "line": 33,
       "column": 6,
       "doc": "Todo is one task in the todo list.",
       "fields": {
         "Description": {
           "type": "string",
           "file": "models.go",
-          "line": 27,
+          "line": 36,
           "column": 2
         },
         "Done": {
           "type": "bool",
           "file": "models.go",
-          "line": 29,
+          "line": 38,
           "column": 2
         },
         "DueAt": {
           "type": "time.Time",
           "file": "models.go",
-          "line": 30,
+          "line": 39,
           "column": 2
         },
         "ID": {
           "type": "int",
           "file": "models.go",
-          "line": 25,
+          "line": 34,
           "column": 2
         },
         "Priority": {
           "type": "string",
           "file": "models.go",
-          "line": 28,
+          "line": 37,
           "column": 2
         },
         "Tags": {
           "type": "[]string",
           "file": "models.go",
-          "line": 31,
+          "line": 40,
           "column": 2
         },
         "Title": {
           "type": "string",
           "file": "models.go",
-          "line": 26,
+          "line": 35,
+          "column": 2
+        },
+        "Un": {
+          "type": "string",
+          "file": "models.go",
+          "line": 42,
           "column": 2
         }
       },
@@ -85,7 +128,7 @@
           "signature": "func() string",
           "doc": "DueLabel formats the due date for templates.",
           "file": "models.go",
-          "line": 43,
+          "line": 54,
           "column": 15
         },
         "Status": {
@@ -93,7 +136,7 @@
           "signature": "func() string",
           "doc": "Status returns the display status for the todo.",
           "file": "models.go",
-          "line": 35,
+          "line": 46,
           "column": 15
         }
       }
@@ -176,10 +219,22 @@
           "line": 19,
           "column": 2
         }
+      },
+      "methods": {
+        "Todos": {
+          "type": "[]Todo",
+          "signature": "func() []Todo",
+          "file": "models.go",
+          "line": 23,
+          "column": 15
+        }
       }
     }
   },
   "short": {
+    "Test": [
+      "github.com/donseba/go-doc/examples/todo.Test"
+    ],
     "Todo": [
       "github.com/donseba/go-doc/examples/todo.Todo"
     ],

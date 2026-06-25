@@ -5,7 +5,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>{{ _page.Title }}</title>
+    <title>{{ page.Title }}</title>
     <style>
         body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5; }
         main { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 28rem); gap: 2rem; align-items: start; }
@@ -19,10 +19,10 @@
 <body>
     <header>
         <p>go-doc todo example</p>
-        <h1>{{ _page.Title }}</h1>
+        <h1>{{ page.Title }}</h1>
         <p>
-            Owned by {{ _page.Owner.Name }}.
-            {{ _page.OpenCount }} open, {{ _page.DoneCount }} done.
+            Owned by {{ page.Owner.Name }}.
+            {{ page.OpenCount }} open, {{ page.DoneCount }} done.
         </p>
     </header>
 
@@ -32,7 +32,7 @@
     </main>
 
     <footer>
-        Generated at {{ _page.GeneratedAt.Format "15:04:05" }}.
+        Generated at {{ page.GeneratedAt.Format "15:04:05" }}.
     </footer>
 </body>
 </html>

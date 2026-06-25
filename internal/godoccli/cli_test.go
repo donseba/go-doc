@@ -39,7 +39,7 @@ type privateState struct {
 	writeFile(t, root, "templates/todos.gohtml", `{{/*
 @model page Page
 */}}
-{{ range $todo := _page.Items }}{{ $todo.Title }}{{ end }}
+{{ range $todo := page.Items }}{{ $todo.Title }}{{ end }}
 `)
 
 	idx, err := buildIndex(root)
@@ -87,9 +87,6 @@ type privateState struct {
 	contract := idx.Templates["templates/todos.gohtml"]
 	if contract.Models["page"] != "example.com/app.Page" {
 		t.Fatalf("@model page = %q", contract.Models["page"])
-	}
-	if contract.Accessors["_page"] != "example.com/app.Page" {
-		t.Fatalf("_page accessor = %q", contract.Accessors["_page"])
 	}
 }
 
@@ -144,7 +141,7 @@ type Secret struct {
 	writeFile(t, root, "templates/public.gohtml", `{{/*
 @model public Public
 */}}
-{{ _public.Title }}`)
+{{ public.Title }}`)
 
 	idx, err := buildIndex(root)
 	if err != nil {
@@ -191,7 +188,7 @@ type Page struct {
 	writeFile(t, root, "templates/page.gohtml", `{{/*
 @model page Page
 */}}
-{{ _page.Title }}`)
+{{ page.Title }}`)
 	writeFile(t, root, "examples/todo/go.mod", "module example.com/app/examples/todo\n\ngo 1.26\n")
 	writeFile(t, root, "examples/todo/todo.go", `package main
 
@@ -202,7 +199,7 @@ type Todo struct {
 	writeFile(t, root, "examples/todo/templates/todo.gohtml", `{{/*
 @model todo github.com/example/app/examples/todo.Todo
 */}}
-{{ _todo.Title }}`)
+{{ todo.Title }}`)
 
 	idx, err := buildIndex(root)
 	if err != nil {

@@ -29,8 +29,7 @@ type (
 	}
 
 	templateIndex struct {
-		Models    map[string]string `json:"models"`
-		Accessors map[string]string `json:"accessors"`
+		Models map[string]string `json:"models"`
 	}
 
 	goTypeIndex struct {
@@ -82,7 +81,7 @@ type (
 )
 
 var (
-	modelPattern = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+	modelPattern = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
 )
 
 func Main() {
@@ -367,13 +366,8 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 			return nil
 		}
 
-		accessors := make(map[string]string, len(models))
-		for name, typ := range models {
-			accessors["_"+name] = typ
-		}
 		idx.Templates[rel(root, path)] = templateIndex{
-			Models:    models,
-			Accessors: accessors,
+			Models: models,
 		}
 		return nil
 	})
@@ -408,7 +402,6 @@ func validateTemplateTypes(idx *indexFile) {
 				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@model %s references unknown type %q", name, typ)})
 			case 1:
 				tmpl.Models[name] = matches[0]
-				tmpl.Accessors["_"+name] = matches[0]
 				idx.Templates[file] = tmpl
 			default:
 				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@model %s type %q is ambiguous: %s", name, typ, strings.Join(matches, ", "))})

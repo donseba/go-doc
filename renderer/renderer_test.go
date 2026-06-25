@@ -16,7 +16,7 @@ func TestRegisterAddsModelAccessorsToTemplate(t *testing.T) {
 	if err := Register(tmpl, Model("page", testPage{Title: "Hello"})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tmpl.Parse(`{{ _page.Title }}`); err != nil {
+	if _, err := tmpl.Parse(`{{ page.Title }}`); err != nil {
 		t.Fatal(err)
 	}
 

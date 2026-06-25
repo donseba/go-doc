@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/url"
 	"os"
@@ -31,10 +34,11 @@ type lspServer struct {
 }
 
 type cachedLSPIndex struct {
-	idx   indexFile
-	path  string
-	root  string
-	mtime time.Time
+	idx         indexFile
+	path        string
+	root        string
+	mtime       time.Time
+	sourceMTime time.Time
 }
 
 type rpcMessage struct {
@@ -147,6 +151,54 @@ type semanticTokens struct {
 	Data []int `json:"data"`
 }
 
+type codeActionParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Range        lspRange               `json:"range"`
+	Context      codeActionContext      `json:"context"`
+}
+
+type codeActionContext struct {
+	Diagnostics []diagnostic `json:"diagnostics,omitempty"`
+}
+
+type codeAction struct {
+	Title       string         `json:"title"`
+	Kind        string         `json:"kind,omitempty"`
+	Diagnostics []diagnostic   `json:"diagnostics,omitempty"`
+	Edit        *workspaceEdit `json:"edit,omitempty"`
+	Command     *command       `json:"command,omitempty"`
+}
+
+type command struct {
+	Title     string `json:"title"`
+	Command   string `json:"command"`
+	Arguments []any  `json:"arguments,omitempty"`
+}
+
+type executeCommandParams struct {
+	Command   string          `json:"command"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
+type missingFieldAppliedCommand struct {
+	Root      string   `json:"root"`
+	OwnerType string   `json:"ownerType"`
+	FieldName string   `json:"fieldName"`
+	FieldType string   `json:"fieldType"`
+	TargetURI string   `json:"targetUri"`
+	Range     lspRange `json:"range"`
+	NewText   string   `json:"newText"`
+}
+
+type workspaceEdit struct {
+	Changes map[string][]textEdit `json:"changes"`
+}
+
+type textEdit struct {
+	Range   lspRange `json:"range"`
+	NewText string   `json:"newText"`
+}
+
 type lspIndex struct {
 	indexFile
 	rootPath string
@@ -181,6 +233,7 @@ const (
 	semanticAccessor = iota
 	semanticField
 	semanticType
+	semanticFunction
 )
 
 var (
@@ -189,9 +242,36 @@ var (
 	lspAssignmentPattern  = regexp.MustCompile(`^\s*(\$[A-Za-z][A-Za-z0-9_]*)\s*:=\s*(.+?)\s*$`)
 	lspActionPattern      = regexp.MustCompile(`\{\{[^}]*\}\}`)
 	lspAccessorPattern    = regexp.MustCompile(`(?:[$_A-Za-z][$_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)+|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)`)
-	lspContractTypeRegexp = regexp.MustCompile(`@model\s+[A-Za-z][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
-	lspModelPrefixRegexp  = regexp.MustCompile(`@model\s+[A-Za-z][A-Za-z0-9_]*\s+[A-Za-z0-9_./-]*$`)
+	lspContractTypeRegexp = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
+	lspModelPrefixRegexp  = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z0-9_./-]*$`)
 )
+
+type templateFuncInfo struct {
+	Signature string
+	Doc       string
+}
+
+var builtInTemplateFuncs = map[string]templateFuncInfo{
+	"and":      {Signature: "and x y ... any", Doc: "Returns the boolean AND of its arguments."},
+	"call":     {Signature: "call function arg ... any", Doc: "Calls the first argument as a function with the remaining arguments."},
+	"html":     {Signature: "html value any", Doc: "Marks text as HTML. Available in html/template."},
+	"index":    {Signature: "index x index ... any", Doc: "Indexes into a map, slice, or array."},
+	"slice":    {Signature: "slice x start [end] any", Doc: "Slices a slice, array, or string."},
+	"js":       {Signature: "js value any", Doc: "Marks text as JavaScript. Available in html/template."},
+	"len":      {Signature: "len x int", Doc: "Returns the length of a string, array, slice, map, or channel."},
+	"not":      {Signature: "not x bool", Doc: "Returns the boolean negation of its argument."},
+	"or":       {Signature: "or x y ... any", Doc: "Returns the boolean OR of its arguments."},
+	"print":    {Signature: "print arg ... string", Doc: "Formats using fmt.Sprint."},
+	"printf":   {Signature: "printf format arg ... string", Doc: "Formats using fmt.Sprintf."},
+	"println":  {Signature: "println arg ... string", Doc: "Formats using fmt.Sprintln."},
+	"urlquery": {Signature: "urlquery value any", Doc: "Escapes text for use in URL query context."},
+	"eq":       {Signature: "eq x y ... bool", Doc: "Reports whether values are equal."},
+	"ne":       {Signature: "ne x y bool", Doc: "Reports whether values are not equal."},
+	"lt":       {Signature: "lt x y bool", Doc: "Reports whether x is less than y."},
+	"le":       {Signature: "le x y bool", Doc: "Reports whether x is less than or equal to y."},
+	"gt":       {Signature: "gt x y bool", Doc: "Reports whether x is greater than y."},
+	"ge":       {Signature: "ge x y bool", Doc: "Reports whether x is greater than or equal to y."},
+}
 
 func runLSP(input io.Reader, output io.Writer, root string) error {
 	absRoot, err := filepath.Abs(root)
@@ -253,10 +333,12 @@ func (s *lspServer) handleRequest(msg rpcMessage) (any, *rpcError) {
 				"completionProvider":     map[string]any{"triggerCharacters": []string{".", "_", "$", " "}},
 				"hoverProvider":          true,
 				"definitionProvider":     true,
+				"codeActionProvider":     true,
 				"documentSymbolProvider": true,
+				"executeCommandProvider": map[string]any{"commands": []string{"goDoc.missingFieldApplied"}},
 				"semanticTokensProvider": map[string]any{
 					"legend": map[string]any{
-						"tokenTypes":     []string{"variable", "property", "type"},
+						"tokenTypes":     []string{"variable", "property", "type", "function"},
 						"tokenModifiers": []string{},
 					},
 					"full": true,
@@ -284,6 +366,12 @@ func (s *lspServer) handleRequest(msg rpcMessage) (any, *rpcError) {
 			return nil, parseError(err)
 		}
 		return s.definition(params), nil
+	case "textDocument/codeAction":
+		var params codeActionParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			return nil, parseError(err)
+		}
+		return s.codeActions(params), nil
 	case "textDocument/documentSymbol":
 		var params documentSymbolParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -296,6 +384,12 @@ func (s *lspServer) handleRequest(msg rpcMessage) (any, *rpcError) {
 			return nil, parseError(err)
 		}
 		return s.semanticTokens(params), nil
+	case "workspace/executeCommand":
+		var params executeCommandParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			return nil, parseError(err)
+		}
+		return nil, s.executeCommand(params)
 	default:
 		return nil, &rpcError{Code: -32601, Message: "method not found"}
 	}
@@ -337,9 +431,82 @@ func (s *lspServer) handleNotification(msg rpcMessage) error {
 			return err
 		}
 		delete(s.docs, params.TextDocument.URI)
-		return writeRPCNotification(s.out, "textDocument/publishDiagnostics", map[string]any{"uri": params.TextDocument.URI, "diagnostics": []diagnostic{}})
+		return s.clearDiagnostics(params.TextDocument.URI)
 	default:
 		return nil
+	}
+}
+
+func (s *lspServer) executeCommand(params executeCommandParams) *rpcError {
+	switch params.Command {
+	case "goDoc.missingFieldApplied":
+		var args []missingFieldAppliedCommand
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return parseError(err)
+		}
+		if len(args) == 0 {
+			return nil
+		}
+		if err := s.applyWorkspaceEdit(args[0]); err != nil {
+			return &rpcError{Code: -32603, Message: err.Error()}
+		}
+		s.applyMissingField(args[0])
+		if err := s.refreshOpenDiagnostics(); err != nil {
+			return &rpcError{Code: -32603, Message: err.Error()}
+		}
+		_ = s.refreshSemanticTokens()
+		return nil
+	default:
+		return &rpcError{Code: -32601, Message: "command not found"}
+	}
+}
+
+func (s *lspServer) applyWorkspaceEdit(applied missingFieldAppliedCommand) error {
+	if applied.TargetURI == "" || applied.NewText == "" {
+		return nil
+	}
+	s.nextID++
+	return writeRPCRequest(s.out, s.nextID, "workspace/applyEdit", map[string]any{
+		"label": fmt.Sprintf("Add field %s to %s", applied.FieldName, shortTypeName(applied.OwnerType)),
+		"edit": workspaceEdit{Changes: map[string][]textEdit{
+			applied.TargetURI: {{
+				Range:   applied.Range,
+				NewText: applied.NewText,
+			}},
+		}},
+	})
+}
+
+func (s *lspServer) applyMissingField(applied missingFieldAppliedCommand) {
+	root, err := filepath.Abs(applied.Root)
+	if err != nil {
+		root = applied.Root
+	}
+	apply := func(idx *indexFile) {
+		if idx == nil || idx.Types == nil {
+			return
+		}
+		owner := idx.Types[applied.OwnerType]
+		if owner.Name == "" {
+			return
+		}
+		if owner.Fields == nil {
+			owner.Fields = map[string]fieldIndex{}
+		}
+		if _, exists := owner.Fields[applied.FieldName]; !exists {
+			owner.Fields[applied.FieldName] = fieldIndex{Type: applied.FieldType, File: owner.File}
+			idx.Types[applied.OwnerType] = owner
+		}
+	}
+	if filepath.Clean(root) == filepath.Clean(s.root) {
+		apply(&s.idx)
+	}
+	for key, cached := range s.indexes {
+		if filepath.Clean(key) != filepath.Clean(root) {
+			continue
+		}
+		apply(&cached.idx)
+		s.indexes[key] = cached
 	}
 }
 
@@ -517,6 +684,19 @@ func (s *lspServer) publishOpenDiagnostics() error {
 	return nil
 }
 
+func (s *lspServer) refreshOpenDiagnostics() error {
+	for uri := range s.docs {
+		if err := s.clearDiagnostics(uri); err != nil {
+			return err
+		}
+	}
+	return s.publishOpenDiagnostics()
+}
+
+func (s *lspServer) clearDiagnostics(uri string) error {
+	return writeRPCNotification(s.out, "textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []diagnostic{}})
+}
+
 func (s *lspServer) refreshSemanticTokens() error {
 	s.nextID++
 	return writeRPCRequest(s.out, s.nextID, "workspace/semanticTokens/refresh", nil)
@@ -554,10 +734,27 @@ func (s *lspServer) loadIndexForRoot(root string) (lspIndex, bool) {
 		return lspIndex{}, false
 	}
 	indexPath := filepath.Join(root, ".go-doc", "index.json")
+	sourceMTime := latestSourceModTime(root)
 	stat, statErr := os.Stat(indexPath)
 	if statErr == nil {
-		if cached, ok := s.indexes[root]; ok && cached.path == indexPath && !stat.ModTime().After(cached.mtime) {
+		if cached, ok := s.indexes[root]; ok &&
+			cached.path == indexPath &&
+			!stat.ModTime().After(cached.mtime) &&
+			!sourceMTime.After(cached.sourceMTime) {
 			return lspIndex{indexFile: cached.idx, rootPath: cached.root}, true
+		}
+		if sourceMTime.After(stat.ModTime()) {
+			idx, _, err := buildTemplateIndex(root)
+			if err == nil {
+				s.indexes[root] = cachedLSPIndex{
+					idx:         idx,
+					path:        indexPath,
+					root:        root,
+					mtime:       stat.ModTime(),
+					sourceMTime: sourceMTime,
+				}
+				return lspIndex{indexFile: idx, rootPath: root}, true
+			}
 		}
 		data, err := os.ReadFile(indexPath)
 		if err != nil {
@@ -567,19 +764,48 @@ func (s *lspServer) loadIndexForRoot(root string) (lspIndex, bool) {
 		if err := json.Unmarshal(data, &idx); err != nil {
 			return lspIndex{}, false
 		}
-		s.indexes[root] = cachedLSPIndex{idx: idx, path: indexPath, root: root, mtime: stat.ModTime()}
+		s.indexes[root] = cachedLSPIndex{idx: idx, path: indexPath, root: root, mtime: stat.ModTime(), sourceMTime: sourceMTime}
 		return lspIndex{indexFile: idx, rootPath: root}, true
 	}
 
-	if cached, ok := s.indexes[root]; ok && cached.path == "" {
+	if cached, ok := s.indexes[root]; ok && cached.path == "" && !sourceMTime.After(cached.sourceMTime) {
 		return lspIndex{indexFile: cached.idx, rootPath: cached.root}, true
 	}
 	idx, _, err := buildTemplateIndex(root)
 	if err != nil {
 		return lspIndex{}, false
 	}
-	s.indexes[root] = cachedLSPIndex{idx: idx, root: root}
+	s.indexes[root] = cachedLSPIndex{idx: idx, root: root, sourceMTime: sourceMTime}
 	return lspIndex{indexFile: idx, rootPath: root}, true
+}
+
+func latestSourceModTime(root string) time.Time {
+	cfg := loadIndexConfig(root)
+	var latest time.Time
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if shouldSkipDir(root, path, d.Name(), cfg) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := filepath.Ext(path)
+		if ext != ".go" && !isTemplateFile(path) {
+			return nil
+		}
+		if !shouldIncludePath(root, path, cfg) {
+			return nil
+		}
+		info, err := d.Info()
+		if err == nil && info.ModTime().After(latest) {
+			latest = info.ModTime()
+		}
+		return nil
+	})
+	return latest
 }
 
 func nearestIndexRoot(path string) string {
@@ -668,10 +894,6 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 	for key, value := range base.Models {
 		models[key] = value
 	}
-	accessors := make(map[string]string, len(base.Accessors))
-	for key, value := range base.Accessors {
-		accessors[key] = value
-	}
 	for _, match := range modelPattern.FindAllStringSubmatch(text, -1) {
 		name := match[1]
 		typeName := normalizeType(match[2])
@@ -679,9 +901,8 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 			typeName = resolved
 		}
 		models[name] = typeName
-		accessors["_"+name] = typeName
 	}
-	return templateIndex{Models: models, Accessors: accessors}
+	return templateIndex{Models: models}
 }
 
 func (s *lspServer) publishDiagnostics(uri string) error {
@@ -692,7 +913,7 @@ func (s *lspServer) publishDiagnostics(uri string) error {
 	idx := s.indexForURI(uri)
 	contract, ok := s.contractForURI(uri, idx)
 	if !ok {
-		return writeRPCNotification(s.out, "textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []diagnostic{}})
+		return s.clearDiagnostics(uri)
 	}
 	items := diagnosticsForText(text, idx, contract)
 	return writeRPCNotification(s.out, "textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": items})
@@ -733,12 +954,18 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 	}
 	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
 		actionText := text[action[0]:action[1]]
+		if isTemplateCommentAction(actionText) {
+			continue
+		}
+		if item, ok := lenDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+			items = append(items, item)
+		}
 		for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
 			start := action[0] + match[0]
 			end := action[0] + match[1]
 			token := actionText[match[0]:match[1]]
 			root := tokenRoot(token)
-			if strings.HasPrefix(root, "_") && contract.Accessors[root] == "" {
+			if looksLikeModelAccessor(root) && contract.Models[root] == "" {
 				items = append(items, diagnostic{
 					Range:    rangeFromOffsets(text, start, start+len(root)),
 					Severity: 1,
@@ -780,6 +1007,58 @@ func tokenRoot(token string) string {
 		return "." + root
 	}
 	return root
+}
+
+func looksLikeModelAccessor(root string) bool {
+	return strings.HasPrefix(root, "_")
+}
+
+func lenDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
+	name, _, end, ok := builtInFunctionInAction(actionText)
+	if !ok || name != "len" {
+		return diagnostic{}, false
+	}
+	argStart := end
+	for argStart < len(actionText) && isSpaceByte(actionText[argStart]) {
+		argStart++
+	}
+	argEnd := strings.LastIndex(actionText, "}}")
+	if argEnd < 0 || argStart >= argEnd {
+		return diagnostic{}, false
+	}
+	rawExpression := actionText[argStart:argEnd]
+	trimmedLeft := strings.TrimLeft(rawExpression, " \t\r\n")
+	leading := len(rawExpression) - len(trimmedLeft)
+	expression := strings.TrimSpace(strings.TrimRight(trimmedLeft, "- "))
+	if expression == "" {
+		return diagnostic{}, false
+	}
+	expressionStart := actionStart + argStart + leading
+	valueType := resolveExpressionValueType(idx, contract, expression, "")
+	if valueType == "" || isLenable(valueType) {
+		return diagnostic{}, false
+	}
+	return diagnostic{
+		Range:    rangeFromOffsets(text, expressionStart, expressionStart+len(expression)),
+		Severity: 2,
+		Source:   "go-doc",
+		Message:  fmt.Sprintf("Cannot call len on '%s' because it is %s", expression, valueType),
+	}, true
+}
+
+func isTemplateCommentAction(actionText string) bool {
+	start := strings.Index(actionText, "{{")
+	end := strings.LastIndex(actionText, "}}")
+	if start < 0 || end < start {
+		return false
+	}
+	body := strings.TrimSpace(actionText[start+2 : end])
+	body = strings.TrimSpace(strings.Trim(body, "- "))
+	return strings.HasPrefix(body, "/*")
+}
+
+func isSpaceByte(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
 }
 
 func (s *lspServer) completions(params textDocumentPositionParams) []completionItem {
@@ -843,10 +1122,28 @@ func accessorPrefixBeforeCaret(text string, offset int) (string, bool) {
 	if strings.Contains(token, ".") {
 		return "", false
 	}
-	if strings.HasPrefix(token, "_") || strings.HasPrefix(token, "$") {
+	if isIdentifierToken(token) || strings.HasPrefix(token, "$") {
 		return token, true
 	}
 	return "", false
+}
+
+func isIdentifierToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	for i, r := range token {
+		if i == 0 {
+			if r != '_' && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') {
+				return false
+			}
+			continue
+		}
+		if r != '_' && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func inTemplateActionBeforeCaret(text string, offset int) bool {
@@ -864,16 +1161,34 @@ func inTemplateActionBeforeCaret(text string, offset int) bool {
 }
 
 func accessorCompletionItems(idx lspIndex, contract templateIndex, prefix string) []completionItem {
-	names := make([]string, 0, len(contract.Accessors))
-	for name := range contract.Accessors {
+	names := make([]string, 0, len(contract.Models)+len(builtInTemplateFuncs))
+	seen := make(map[string]bool, len(contract.Models)+len(builtInTemplateFuncs))
+	for name := range contract.Models {
 		if strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+			seen[name] = true
+		}
+	}
+	for name := range builtInTemplateFuncs {
+		if strings.HasPrefix(name, prefix) && !seen[name] {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
 	items := make([]completionItem, 0, len(names))
 	for _, name := range names {
-		typeName := contract.Accessors[name]
+		typeName := contract.Models[name]
+		if typeName == "" {
+			fn := builtInTemplateFuncs[name]
+			items = append(items, completionItem{
+				Label:         name,
+				Kind:          3,
+				Detail:        fn.Signature,
+				Documentation: fn.Doc,
+				InsertText:    name + " ",
+			})
+			continue
+		}
 		typ := idx.Types[typeName]
 		detail := typeName
 		doc := ""
@@ -937,6 +1252,13 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 		return hover{
 			Contents: markdown(fmt.Sprintf("```go\ntype %s struct\n```\n%s", typ.Name, typ.Doc)),
 			Range:    rangeFromOffsets(text, ref.start, ref.end),
+		}
+	}
+	if name, start, end, ok := builtInFunctionAt(text, offset); ok {
+		fn := builtInTemplateFuncs[name]
+		return hover{
+			Contents: markdown(fmt.Sprintf("```gotemplate\n%s\n```\n%s", fn.Signature, fn.Doc)),
+			Range:    rangeFromOffsets(text, start, end),
 		}
 	}
 	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
@@ -1004,6 +1326,264 @@ func (s *lspServer) definition(params textDocumentPositionParams) any {
 	return nil
 }
 
+func (s *lspServer) codeActions(params codeActionParams) []codeAction {
+	text, ok := s.documentText(params.TextDocument.URI)
+	if !ok {
+		return nil
+	}
+	idx := s.indexForURI(params.TextDocument.URI)
+	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
+	if !ok {
+		return nil
+	}
+	var actions []codeAction
+	seen := make(map[string]bool)
+	for _, item := range diagnosticsForText(text, idx, contract) {
+		if len(params.Context.Diagnostics) > 0 {
+			if !diagnosticListed(item, params.Context.Diagnostics) {
+				continue
+			}
+		} else if !rangesOverlap(item.Range, params.Range) {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(item.Message, "Unknown field "):
+			action, ok := missingFieldCodeAction(text, idx, contract, item)
+			if ok && !seen[action.Title] {
+				actions = append(actions, action)
+				seen[action.Title] = true
+			}
+		case strings.HasPrefix(item.Message, "Unknown go-doc model type "):
+			action, ok := missingModelCodeAction(idx, item)
+			if ok && !seen[action.Title] {
+				actions = append(actions, action)
+				seen[action.Title] = true
+			}
+		}
+	}
+	return actions
+}
+
+func missingFieldCodeAction(text string, idx lspIndex, contract templateIndex, item diagnostic) (codeAction, bool) {
+	offset := offsetAt(text, item.Range.Start)
+	ref, ok := fieldReferenceAt(text, offset, idx, contract)
+	if !ok {
+		return codeAction{}, false
+	}
+	owner := idx.Types[ref.ownerType]
+	if owner.File == "" || owner.Name == "" {
+		return codeAction{}, false
+	}
+	insertOffset, ok := structFieldInsertOffset(idx.rootPath, owner.File, owner.Name)
+	if !ok {
+		return codeAction{}, false
+	}
+	fieldType := inferredFieldType(text, ref)
+	newText := fmt.Sprintf("\n\t%s %s", ref.fieldName, fieldType)
+	targetURI := uriFromPath(filepath.Join(idx.rootPath, filepath.FromSlash(owner.File)))
+	editRange := lspRange{Start: positionAtFileOffset(idx.rootPath, owner.File, insertOffset), End: positionAtFileOffset(idx.rootPath, owner.File, insertOffset)}
+	action := codeAction{
+		Title:       fmt.Sprintf("Add field %s %s to %s", ref.fieldName, fieldType, owner.Name),
+		Kind:        "quickfix",
+		Diagnostics: []diagnostic{item},
+		Command: &command{
+			Title:   fmt.Sprintf("Add field %s %s to %s", ref.fieldName, fieldType, owner.Name),
+			Command: "goDoc.missingFieldApplied",
+			Arguments: []any{missingFieldAppliedCommand{
+				Root:      idx.rootPath,
+				OwnerType: ref.ownerType,
+				FieldName: ref.fieldName,
+				FieldType: fieldType,
+				TargetURI: targetURI,
+				Range:     editRange,
+				NewText:   newText,
+			}},
+		},
+	}
+	return action, true
+}
+
+func missingModelCodeAction(idx lspIndex, item diagnostic) (codeAction, bool) {
+	typeName := normalizeType(textFromDiagnosticMessage(item.Message))
+	if typeName == "" || idx.Module == "" {
+		return codeAction{}, false
+	}
+	separator := strings.LastIndex(typeName, ".")
+	if separator < 0 || separator == len(typeName)-1 {
+		return codeAction{}, false
+	}
+	packagePath := typeName[:separator]
+	structName := typeName[separator+1:]
+	if !strings.HasPrefix(packagePath, idx.Module) {
+		return codeAction{}, false
+	}
+	relativePackage := strings.TrimPrefix(packagePath, idx.Module)
+	relativePackage = strings.TrimPrefix(relativePackage, "/")
+	dir := filepath.Join(idx.rootPath, filepath.FromSlash(relativePackage))
+	packageName := packageNameForDir(idx.rootPath, dir, packagePath)
+	targetURI := uriFromPath(filepath.Join(dir, "go_doc_models.go"))
+	edit := missingModelTextEdit(dir, packageName, structName)
+	action := codeAction{
+		Title:       fmt.Sprintf("Create model struct %s", structName),
+		Kind:        "quickfix",
+		Diagnostics: []diagnostic{item},
+		Edit: &workspaceEdit{Changes: map[string][]textEdit{
+			targetURI: {edit},
+		}},
+	}
+	return action, true
+}
+
+func rangesOverlap(left, right lspRange) bool {
+	leftStart := positionOrder(left.Start)
+	leftEnd := positionOrder(left.End)
+	rightStart := positionOrder(right.Start)
+	rightEnd := positionOrder(right.End)
+	return leftStart <= rightEnd && rightStart <= leftEnd
+}
+
+func diagnosticListed(item diagnostic, diagnostics []diagnostic) bool {
+	for _, other := range diagnostics {
+		if other.Message == item.Message &&
+			other.Range.Start.Line == item.Range.Start.Line &&
+			other.Range.Start.Character == item.Range.Start.Character &&
+			other.Range.End.Line == item.Range.End.Line &&
+			other.Range.End.Character == item.Range.End.Character {
+			return true
+		}
+	}
+	return false
+}
+
+func positionOrder(pos position) int {
+	return pos.Line*1_000_000 + pos.Character
+}
+
+func textFromDiagnosticMessage(message string) string {
+	start := strings.Index(message, "'")
+	end := strings.LastIndex(message, "'")
+	if start < 0 || end <= start {
+		return ""
+	}
+	return message[start+1 : end]
+}
+
+func structFieldInsertOffset(root, file, typeName string) (int, bool) {
+	path := filepath.Join(root, filepath.FromSlash(file))
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	if err != nil {
+		return 0, false
+	}
+	var insertOffset int
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		if insertOffset != 0 {
+			return false
+		}
+		spec, ok := node.(*ast.TypeSpec)
+		if !ok || spec.Name == nil || spec.Name.Name != typeName {
+			return true
+		}
+		structType, ok := spec.Type.(*ast.StructType)
+		if !ok {
+			return false
+		}
+		file := fset.File(structType.End())
+		if file == nil {
+			return false
+		}
+		insertOffset = file.Offset(structType.End() - 1)
+		return false
+	})
+	return insertOffset, insertOffset != 0
+}
+
+func positionAtFileOffset(root, file string, offset int) position {
+	path := filepath.Join(root, filepath.FromSlash(file))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return position{}
+	}
+	return positionAt(string(data), offset)
+}
+
+func inferredFieldType(text string, ref fieldRef) string {
+	actionStart := strings.LastIndex(text[:ref.start], "{{")
+	actionEnd := strings.Index(text[ref.end:], "}}")
+	if actionStart < 0 || actionEnd < 0 {
+		return "string"
+	}
+	action := strings.TrimSpace(strings.Trim(text[actionStart+2:ref.end+actionEnd], "- "))
+	switch {
+	case strings.HasPrefix(action, "if "):
+		return "bool"
+	case strings.HasPrefix(action, "range "):
+		return "[]string"
+	default:
+		return "string"
+	}
+}
+
+func packageNameForDir(root, dir, packagePath string) string {
+	files, err := os.ReadDir(dir)
+	if err == nil {
+		for _, file := range files {
+			if file.IsDir() || filepath.Ext(file.Name()) != ".go" || strings.HasSuffix(file.Name(), "_test.go") {
+				continue
+			}
+			fset := token.NewFileSet()
+			parsed, err := parser.ParseFile(fset, filepath.Join(dir, file.Name()), nil, parser.PackageClauseOnly)
+			if err == nil && parsed.Name != nil {
+				return parsed.Name.Name
+			}
+		}
+	}
+	if dir == root {
+		base := filepath.Base(root)
+		return sanitizePackageName(base)
+	}
+	return sanitizePackageName(filepath.Base(packagePath))
+}
+
+func sanitizePackageName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, name)
+	name = strings.Trim(name, "_")
+	if name == "" || (name[0] >= '0' && name[0] <= '9') {
+		return "models"
+	}
+	return name
+}
+
+func missingModelTextEdit(dir, packageName, structName string) textEdit {
+	path := filepath.Join(dir, "go_doc_models.go")
+	newType := fmt.Sprintf("// %s is rendered by go-doc templates.\ntype %s struct {\n}\n", structName, structName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return textEdit{
+			Range:   lspRange{},
+			NewText: fmt.Sprintf("package %s\n\n%s", packageName, newType),
+		}
+	}
+	text := string(data)
+	offset := len(text)
+	prefix := "\n\n"
+	if strings.HasSuffix(text, "\n\n") {
+		prefix = ""
+	} else if strings.HasSuffix(text, "\n") {
+		prefix = "\n"
+	}
+	pos := positionAt(text, offset)
+	return textEdit{
+		Range:   lspRange{Start: pos, End: pos},
+		NewText: prefix + newType,
+	}
+}
+
 func (s *lspServer) documentSymbols(params documentSymbolParams) []documentSymbol {
 	idx := s.indexForURI(params.TextDocument.URI)
 	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
@@ -1011,7 +1591,7 @@ func (s *lspServer) documentSymbols(params documentSymbolParams) []documentSymbo
 		return nil
 	}
 	var symbols []documentSymbol
-	for name, typeName := range contract.Accessors {
+	for name, typeName := range contract.Models {
 		rng := lspRange{Start: position{}, End: position{}}
 		symbols = append(symbols, documentSymbol{Name: name, Detail: typeName, Kind: 13, Range: rng, SelectionRange: rng})
 	}
@@ -1046,12 +1626,18 @@ func semanticTokensForText(text string, idx lspIndex, contract templateIndex) []
 	}
 	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
 		actionText := text[action[0]:action[1]]
+		if isTemplateCommentAction(actionText) {
+			continue
+		}
+		if _, start, end, ok := builtInFunctionInAction(actionText); ok {
+			tokens = append(tokens, semanticToken{start: action[0] + start, length: end - start, tokenType: semanticFunction})
+		}
 		for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
 			start := action[0] + match[0]
 			end := action[0] + match[1]
 			token := actionText[match[0]:match[1]]
 			root := tokenRoot(token)
-			if (strings.HasPrefix(root, "_") || strings.HasPrefix(root, "$")) && contract.Accessors[root] != "" {
+			if contract.Models[root] != "" || strings.HasPrefix(root, "$") {
 				tokens = append(tokens, semanticToken{start: start, length: len(root), tokenType: semanticAccessor})
 			}
 			ref, ok := fieldReferenceAt(text, start+(end-start)/2, idx, contract)
@@ -1081,6 +1667,47 @@ func shortTypeName(typeName string) string {
 		return typeName
 	}
 	return typeName[separator+1:]
+}
+
+func builtInFunctionAt(text string, offset int) (string, int, int, bool) {
+	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
+		if offset < action[0] || offset > action[1] {
+			continue
+		}
+		name, start, end, ok := builtInFunctionInAction(text[action[0]:action[1]])
+		if !ok {
+			return "", 0, 0, false
+		}
+		start += action[0]
+		end += action[0]
+		if offset >= start && offset <= end {
+			return name, start, end, true
+		}
+	}
+	return "", 0, 0, false
+}
+
+func builtInFunctionInAction(actionText string) (string, int, int, bool) {
+	start := strings.Index(actionText, "{{")
+	if start < 0 {
+		return "", 0, 0, false
+	}
+	start += len("{{")
+	for start < len(actionText) && (actionText[start] == '-' || actionText[start] == ' ' || actionText[start] == '\t' || actionText[start] == '\r' || actionText[start] == '\n') {
+		start++
+	}
+	end := start
+	for end < len(actionText) && isTokenChar(actionText[end]) {
+		end++
+	}
+	if start == end {
+		return "", 0, 0, false
+	}
+	name := actionText[start:end]
+	if _, ok := builtInTemplateFuncs[name]; !ok {
+		return "", 0, 0, false
+	}
+	return name, start, end, true
 }
 
 func compactSemanticTokens(tokens []semanticToken) []semanticToken {
@@ -1137,12 +1764,12 @@ func resolveExpressionValueType(idx lspIndex, contract templateIndex, expression
 	root := parts[0]
 	var rootType string
 	switch {
-	case strings.HasPrefix(root, "_"):
-		rootType = contract.Accessors[root]
 	case strings.HasPrefix(root, "$"):
-		rootType = contract.Accessors[root]
+		rootType = contract.Models[root]
 	case strings.HasPrefix(clean, "."):
 		rootType = dotType
+	default:
+		rootType = contract.Models[root]
 	}
 	if rootType == "" {
 		return ""
@@ -1253,6 +1880,17 @@ func mapElementType(idx lspIndex, typeExpr string) string {
 func isRangeable(typeExpr string) bool {
 	normalized := stripPointer(strings.TrimSpace(typeExpr))
 	return strings.HasPrefix(normalized, "[]") || strings.HasPrefix(normalized, "[") || strings.HasPrefix(normalized, "map[")
+}
+
+func isLenable(typeExpr string) bool {
+	normalized := stripPointer(strings.TrimSpace(typeExpr))
+	return normalized == "string" ||
+		strings.HasPrefix(normalized, "[]") ||
+		strings.HasPrefix(normalized, "[") ||
+		strings.HasPrefix(normalized, "map[") ||
+		strings.HasPrefix(normalized, "chan ") ||
+		strings.HasPrefix(normalized, "<-chan ") ||
+		strings.HasPrefix(normalized, "chan<- ")
 }
 
 func normalizeValueType(typeExpr string) string {
@@ -1369,9 +2007,9 @@ func fieldTargetBeforeCaret(text string, offset int, idx lspIndex, contract temp
 	lastDot := strings.LastIndex(token, ".")
 	chain := token[:lastDot+1]
 	parts := strings.FieldsFunc(chain, func(r rune) bool { return r == '.' })
-	if strings.HasPrefix(chain, "_") || strings.HasPrefix(chain, "$") {
+	if !strings.HasPrefix(chain, ".") {
 		vars := scopeAt(text, offset, idx, contract).vars
-		rootType := contract.Accessors[parts[0]]
+		rootType := contract.Models[parts[0]]
 		if rootType == "" {
 			rootType = vars[parts[0]]
 		}
@@ -1395,9 +2033,9 @@ func fieldReferenceAt(text string, offset int, idx lspIndex, contract templateIn
 	if len(parts) == 0 {
 		return fieldRef{}, false
 	}
-	if strings.HasPrefix(token, "_") || strings.HasPrefix(token, "$") {
+	if !strings.HasPrefix(token, ".") {
 		vars := scopeAt(text, offset, idx, contract).vars
-		rootType := contract.Accessors[parts[0]]
+		rootType := contract.Models[parts[0]]
 		if rootType == "" {
 			rootType = vars[parts[0]]
 		}

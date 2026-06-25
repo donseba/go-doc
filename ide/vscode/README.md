@@ -5,13 +5,13 @@ VS Code integration for typed Go templates powered by `go-doc lsp`.
 ## Features
 
 - completions for `@model` Go type names
-- completions for typed template accessors such as `_page.`
+- completions for typed template model names such as `page.`
 - completions for dot context inside `range` blocks
 - completions for exported fields and methods
-- diagnostics for unknown accessors and fields
-- diagnostics for invalid range sources such as `range _page.Title`
+- diagnostics for unknown model names and fields
+- diagnostics for invalid range sources such as `range page.Title`
 - hover and go to definition for contract types, fields, and methods
-- semantic highlighting for model types, accessors, fields, and methods
+- semantic highlighting for model types, model names, fields, and methods
 - debounced automatic index rebuilds
 
 ## Requirements

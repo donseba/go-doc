@@ -137,7 +137,9 @@ func (app *app) render(w http.ResponseWriter, page TodoPage) {
 	tmpl := template.New("main.gohtml")
 	if err := renderer.Register(tmpl,
 		renderer.Model("page", page),
+		renderer.Model("Page", page),
 		renderer.Model("todo", page.Selected),
+		renderer.Model("User", page.Owner),
 	); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

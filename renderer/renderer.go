@@ -10,8 +10,8 @@ import (
 
 // Binding binds a Go value to a go-doc template model name.
 //
-// A model named "page" becomes available as {{ _page.Title }}. The leading
-// underscore mirrors go-doc's @model convention.
+// A model named "page" becomes available as {{ page.Title }}. The accessor name
+// matches the @model declaration exactly.
 type Binding struct {
 	Name  string
 	Value any
@@ -42,12 +42,11 @@ func Register(tmpl *template.Template, models ...Binding) (err error) {
 		if !validModelName(name) {
 			return fmt.Errorf("register models: invalid model name %q", model.Name)
 		}
-		accessor := "_" + name
-		if _, exists := funcs[accessor]; exists {
+		if _, exists := funcs[name]; exists {
 			return fmt.Errorf("register models: duplicate model name %q", name)
 		}
 		captured := model.Value
-		funcs[accessor] = func() any {
+		funcs[name] = func() any {
 			return captured
 		}
 	}

@@ -45,13 +45,13 @@ after editor-triggered rebuilds and gives other tools a stable file to inspect.
 
 ## Editor Features
 
-- completions for `@model` types, accessors, fields, methods, and range dot
+- completions for `@model` types, model names, fields, methods, and range dot
   contexts
-- diagnostics for unknown accessors, unknown fields, unknown model types, and
+- diagnostics for unknown model names, unknown fields, unknown model types, and
   invalid `range` sources
 - hover and go-to-definition for model types, fields, and methods
-- document symbols for declared accessors
-- semantic highlighting for model types, accessors, fields, and methods
+- document symbols for declared models
+- semantic highlighting for model types, model names, fields, and methods
 
 ## Actions
 

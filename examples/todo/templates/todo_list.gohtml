@@ -1,17 +1,33 @@
 {{/*
-@model page github.com/donseba/go-doc/examples/todo.TodoPage
+@model Page github.com/donseba/go-doc/examples/todo.TodoPage
+@model User github.com/donseba/go-doc/examples/todo.User
 */}}
 <section aria-labelledby="todo-list-title">
     <h2 id="todo-list-title">Todos</h2>
-    <p>{{ len _page.Todos }} tasks for {{ _page.Owner.Name }}.</p>
+    <p>{{ len Page.Todos }} tasks for {{ Page.Owner.Name }}.</p>
 
     <ul>
-        {{ range _page.Todos }}
+        {{ range Page.Todos }}
             <li>
                 <a href="/todos/{{ .ID }}">{{ .Title }}</a>
                 <span>{{ .Priority }}</span>
                 <span>{{ .Status }}</span>
                 <small>due {{ .DueLabel }}</small>
+            </li>
+        {{ end }}
+    </ul>
+
+    <p>Rendered at {{ Page.GeneratedAt.Format "15:04:05" }}.</p>
+
+    <h3>Todos from a User method</h3>
+    <ul>
+        {{ range User.Todos }}
+            <li>
+                <a href="/todos/{{ .ID }}">{{ .Title }}</a>
+                <span>{{ .Priority }}</span>
+                <span>{{ .Status }}</span>
+                <small>due {{ .DueLabel }}</small>
+                {{ .Un }}
             </li>
         {{ end }}
     </ul>
