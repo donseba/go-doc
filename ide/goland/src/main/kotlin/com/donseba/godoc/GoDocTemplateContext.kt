@@ -19,6 +19,13 @@ data class GoDocFuncReference(
     val endOffset: Int,
 )
 
+data class GoDocTemplateIncludeReference(
+    val templateName: String,
+    val templatePath: String,
+    val startOffset: Int,
+    val endOffset: Int,
+)
+
 object GoDocTemplateContext {
     fun fieldReferenceAt(
         text: String,
@@ -142,6 +149,39 @@ object GoDocTemplateContext {
         return null
     }
 
+    fun templateIncludeAt(
+        text: String,
+        offset: Int,
+        index: GoDocIndex,
+    ): GoDocTemplateIncludeReference? {
+        for (match in templateActionPattern.findAll(text)) {
+            val actionRange = match.range
+            if (offset < actionRange.first || offset > actionRange.last + 1) continue
+            return templateIncludeReferencesInAction(match.value, actionRange.first, index)
+                .firstOrNull { offset >= it.startOffset && offset <= it.endOffset }
+        }
+        return null
+    }
+
+    private fun templateIncludeReferencesInAction(
+        actionText: String,
+        actionStartOffset: Int,
+        index: GoDocIndex,
+    ): List<GoDocTemplateIncludeReference> {
+        val match = templateIncludePattern.find(actionText) ?: return emptyList()
+        val nameRange = match.groups[1]?.range ?: return emptyList()
+        val name = match.groupValues[1]
+        val template = index.templateByName(name) ?: return emptyList()
+        return listOf(
+            GoDocTemplateIncludeReference(
+                templateName = name,
+                templatePath = template.first,
+                startOffset = actionStartOffset + nameRange.first,
+                endOffset = actionStartOffset + nameRange.last + 1,
+            ),
+        )
+    }
+
     private fun templateFunctionReferencesInAction(
         actionText: String,
         actionStartOffset: Int,
@@ -249,6 +289,20 @@ object GoDocTemplateContext {
             }
         }
         return refs.distinctBy { "${it.startOffset}:${it.endOffset}:${it.funcName}" }
+    }
+
+    fun templateIncludeReferencesInRange(
+        text: String,
+        startOffset: Int,
+        endOffset: Int,
+        index: GoDocIndex,
+    ): List<GoDocTemplateIncludeReference> {
+        return templateActionPattern.findAll(text, startOffset)
+            .takeWhile { it.range.first < endOffset }
+            .flatMap { match -> templateIncludeReferencesInAction(match.value, match.range.first, index) }
+            .filter { it.startOffset < endOffset && it.endOffset > startOffset }
+            .distinctBy { "${it.startOffset}:${it.endOffset}:${it.templatePath}" }
+            .toList()
     }
 
     private fun contractForText(text: String, index: GoDocIndex): TemplateContract? {
@@ -384,6 +438,7 @@ object GoDocTemplateContext {
 
     private val actionPattern = Regex("""\{\{\s*(?:-)?\s*(range|with|end)\b([^}]*)\}\}""")
     private val templateActionPattern = Regex("""\{\{\s*(?:-)?\s*[^}]*\}\}""")
+    private val templateIncludePattern = Regex("""^\{\{\s*(?:-)?\s*template\s+"([^"]+)"(?:\s+[^}]*)?\s*-?\}\}$""")
     private val modelContractPattern = Regex("""(?m)^\s*@model\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
     private val dotContractPattern = Regex("""(?m)^\s*@dot\s+([A-Za-z0-9_./\-]+)""")
     private val funcContractPattern = Regex("""(?m)^\s*@func\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")

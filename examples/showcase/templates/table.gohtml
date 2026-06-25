@@ -1,0 +1,107 @@
+{{/*
+@model Page github.com/donseba/go-doc/examples/showcase.ShowcasePage
+
+@func firstUser github.com/donseba/go-doc/examples/showcase.FirstUser
+@func userByID github.com/donseba/go-doc/examples/showcase.UserByID
+*/}}
+{{ define "content" }}
+<p class="eyebrow">Nested templates</p>
+<h1>Table rows with child templates</h1>
+<p class="lead">The parent owns the list. Each row is rendered by a child template that declares <code>@dot</code> as a single <code>User</code>.</p>
+
+<section id="dot" class="panel">
+    <h2>Rendered table</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Permissions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ range Page.Users }}
+                {{ template "user_row.gohtml" . }}
+            {{ end }}
+        </tbody>
+    </table>
+</section>
+
+<section id="func" class="panel">
+    <h2>Function access</h2>
+    <p>Declared functions are typed too. Completion works inside <code>with</code>, and parenthesized calls expose the returned type after the dot.</p>
+    <div class="example-grid two">
+        <article class="user-card">
+            <h3>with function result</h3>
+            {{ with firstUser }}
+                <p><strong>{{ .Name }}</strong> has {{ len .Permissions }} permissions.</p>
+            {{ end }}
+        </article>
+        <article class="user-card">
+            <h3>parenthesized result</h3>
+            <p>{{ (userByID 2).Name }} is a {{ (userByID 2).Role }}.</p>
+        </article>
+    </div>
+</section>
+
+<section class="code-grid">
+    <article class="panel">
+        <h2>Parent template</h2>
+<pre><code>&#123;&#123;/*
+&#64;model Page github.com/donseba/go-doc/examples/showcase.ShowcasePage
+*/&#125;&#125;
+
+&lt;tbody&gt;
+    &#123;&#123; range Page.Users &#125;&#125;
+        &#123;&#123; template "user_row.gohtml" . &#125;&#125;
+    &#123;&#123; end &#125;&#125;
+&lt;/tbody&gt;</code></pre>
+    </article>
+    <article class="panel">
+        <h2>Row template</h2>
+<pre><code>&#123;&#123;/*
+&#64;dot github.com/donseba/go-doc/examples/showcase.User
+*/&#125;&#125;
+
+&lt;tr&gt;
+    &lt;td&gt;&#123;&#123; .ID &#125;&#125;&lt;/td&gt;
+    &lt;td&gt;&#123;&#123; .Name &#125;&#125;&lt;/td&gt;
+    &lt;td&gt;&#123;&#123; .Role &#125;&#125;&lt;/td&gt;
+    &lt;td&gt;&#123;&#123; .Status &#125;&#125;&lt;/td&gt;
+&lt;/tr&gt;</code></pre>
+    </article>
+</section>
+
+<section class="panel">
+    <h2>Include awareness</h2>
+    <p>Because <code>user_row.gohtml</code> declares <code>@dot User</code>, go-doc can warn when the parent passes the wrong value into that child template.</p>
+<pre><code>&#123;&#123;/* valid: dot is User inside the range */&#125;&#125;
+&#123;&#123; range Page.Users &#125;&#125;
+    &#123;&#123; template "user_row.gohtml" . &#125;&#125;
+&#123;&#123; end &#125;&#125;
+
+&#123;&#123;/* invalid: Page.Users is []User, not User */&#125;&#125;
+&#123;&#123; template "user_row.gohtml" Page.Users &#125;&#125;</code></pre>
+</section>
+
+<section class="panel">
+    <h2>Go code</h2>
+<pre><code>{{`type ShowcasePage struct {
+    Users []User
+}
+
+type User struct {
+    ID          int
+    Name        string
+    Role        string
+    Active      bool
+    Permissions []Permission
+}
+
+func UserByID(id int) User {
+    // Return a typed User. go-doc follows that return type in templates.
+}`}}</code></pre>
+</section>
+{{ end }}

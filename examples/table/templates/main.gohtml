@@ -42,7 +42,7 @@
         </thead>
         <tbody>
             {{ range Page.Users }}
-                {{ template "user_row.gohtml" . }}
+                {{ template "user_row.gohtml" .ID }}
             {{ end }}
         </tbody>
     </table>

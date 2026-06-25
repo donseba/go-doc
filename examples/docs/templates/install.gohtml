@@ -1,0 +1,20 @@
+{{ define "content" }}
+<h2>Install the CLI</h2>
+<pre><code>go install github.com/donseba/go-doc@latest</code></pre>
+
+<h2>Install an editor package</h2>
+<table class="table">
+    <thead><tr><th>Editor</th><th>Release asset</th></tr></thead>
+    <tbody>
+        <tr><td>GoLand</td><td><code>go-doc-goland-plugin-*.zip</code></td></tr>
+        <tr><td>VS Code</td><td><code>go-doc-vscode-*.vsix</code></td></tr>
+        <tr><td>Sublime Text</td><td><code>LSP-go-doc.sublime-package</code></td></tr>
+        <tr><td>Vim</td><td><code>go-doc-vim.zip</code></td></tr>
+        <tr><td>Neovim</td><td><code>go-doc-neovim.zip</code></td></tr>
+    </tbody>
+</table>
+
+<h2>Generate an index</h2>
+<pre><code>go-doc index -o .go-doc/index.json .</code></pre>
+<p>The command only writes an index when at least one template contains a contract annotation.</p>
+{{ end }}

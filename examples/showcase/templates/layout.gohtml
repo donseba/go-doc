@@ -1,0 +1,60 @@
+{{/*
+@model Page github.com/donseba/go-doc/examples/showcase.ShowcasePage
+
+@func firstUser github.com/donseba/go-doc/examples/showcase.FirstUser
+@func userByID github.com/donseba/go-doc/examples/showcase.UserByID
+*/}}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ Page.Title }} - go-doc</title>
+    <link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <a class="brand" href="/">
+                <span class="brand-mark">gd</span>
+                <span>
+                    <strong>go-doc showcase</strong>
+                    <small>typed Go templates</small>
+                </span>
+            </a>
+
+            <nav class="nav" aria-label="Showcase pages">
+                <section class="nav-group">
+                    <h2>Start</h2>
+                    <a class="nav-link {{ if eq Page.Active "home" }}active{{ end }}" href="/">Home</a>
+                </section>
+                <section class="nav-group">
+                    <h2>Contracts</h2>
+                    <a class="nav-link {{ if eq Page.Active "contracts" }}active{{ end }}" href="/contracts">Contract syntax</a>
+                    <a class="nav-link" href="/contracts#model">@model</a>
+                    <a class="nav-link" href="/contracts#dot">@dot</a>
+                    <a class="nav-link" href="/contracts#func">@func</a>
+                </section>
+                <section class="nav-group">
+                    <h2>Examples</h2>
+                    <a class="nav-link {{ if eq Page.Active "table" }}active{{ end }}" href="/table">Table rows</a>
+                </section>
+                <section class="nav-group">
+                    <h2>Tooling</h2>
+                    <a class="nav-link" href="http://localhost:8101">Docs</a>
+                    <a class="nav-link" href="https://github.com/donseba/go-doc">GitHub</a>
+                </section>
+            </nav>
+
+            <div class="sidebar-note">
+                <span>Editor loop</span>
+                <p>Open the templates and try completion, hover, diagnostics, and go-to-definition.</p>
+            </div>
+        </aside>
+
+        <main class="content">
+            {{ template "content" }}
+        </main>
+    </div>
+</body>
+</html>

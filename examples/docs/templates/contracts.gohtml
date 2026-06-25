@@ -1,0 +1,51 @@
+{{ define "content" }}
+<div class="callout">
+    <strong>Contract first, runtime second.</strong>
+    <p>A contract describes what the template expects. Runtime rendering remains normal Go code.</p>
+</div>
+
+<h2>Model access</h2>
+<pre><code>&#123;&#123;/*
+&#64;model Page github.com/example/app.TodoPage
+*/&#125;&#125;
+
+&lt;h1&gt;&#123;&#123; Page.Title &#125;&#125;&lt;/h1&gt;
+&lt;p&gt;&#123;&#123; Page.OpenCount &#125;&#125; open&lt;/p&gt;</code></pre>
+
+<h2>Dot access</h2>
+<pre><code>&#123;&#123;/*
+&#64;dot github.com/example/app.Todo
+*/&#125;&#125;
+
+&lt;li&gt;&#123;&#123; .Title &#125;&#125; - &#123;&#123; .Status &#125;&#125;&lt;/li&gt;</code></pre>
+
+<p><code>@dot</code> is especially useful for row templates, card templates, and fragments rendered from a parent loop.</p>
+
+<h2>Function access</h2>
+<pre><code>&#123;&#123;/*
+&#64;model Page github.com/example/app.TodoPage
+&#64;func userByID github.com/example/app.UserByID
+*/&#125;&#125;
+
+&#123;&#123; with userByID 42 &#125;&#125;
+    &lt;h2&gt;&#123;&#123; .Name &#125;&#125;&lt;/h2&gt;
+&#123;&#123; end &#125;&#125;
+
+&lt;p&gt;&#123;&#123; (userByID 42).Email &#125;&#125;&lt;/p&gt;</code></pre>
+
+<p><code>@func</code> lets go-doc understand custom template functions, including argument checks and return types. If a function returns a struct, completion continues through <code>with</code> blocks and parenthesized calls.</p>
+
+<h2>Template inclusion</h2>
+<pre><code>&#123;&#123;/* parent.gohtml */&#125;&#125;
+&#123;&#123; range Page.Users &#125;&#125;
+    &#123;&#123; template "user_row.gohtml" . &#125;&#125;
+&#123;&#123; end &#125;&#125;
+
+&#123;&#123;/* user_row.gohtml */&#125;&#125;
+&#123;&#123;/*
+&#64;dot github.com/example/app.User
+*/&#125;&#125;
+&lt;tr&gt;&lt;td&gt;&#123;&#123; .Name &#125;&#125;&lt;/td&gt;&lt;/tr&gt;</code></pre>
+
+<p>When a child template declares <code>@dot</code>, go-doc can validate parent calls such as <code>{{`{{ template "user_row.gohtml" . }}`}}</code>. Passing <code>Page.Users</code> directly to a row template warns because the child expects one <code>User</code>, not <code>[]User</code>.</p>
+{{ end }}

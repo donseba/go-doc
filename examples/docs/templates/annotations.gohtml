@@ -1,0 +1,17 @@
+{{ define "content" }}
+<table class="table">
+    <thead><tr><th>Annotation</th><th>Meaning</th><th>Template use</th></tr></thead>
+    <tbody>
+        <tr><td><code>@model Page pkg.Page</code></td><td>Named root value</td><td><code>{{`{{ Page.Title }}`}}</code></td></tr>
+        <tr><td><code>@dot pkg.User</code></td><td>The current dot value</td><td><code>{{`{{ .Name }}`}}</code></td></tr>
+        <tr><td><code>@func userByID pkg.UserByID</code></td><td>Declared template function</td><td><code>{{`{{ (userByID 2).Name }}`}}</code></td></tr>
+    </tbody>
+</table>
+
+<h2>Functions can return complex values</h2>
+<pre><code>{{`{{ with firstUser }}
+    {{ .Name }} - {{ .Status }}
+{{ end }}
+
+{{ (userByID 2).Email }}`}}</code></pre>
+{{ end }}

@@ -12,6 +12,17 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
 
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
+        GoDocTemplateContext.templateIncludeAt(file.text, source.textOffset, index)?.let { reference ->
+            val child = index.templates[reference.templatePath]
+            val expected = child?.dot?.let { index.resolveGoType(it) ?: it }.orEmpty()
+            val expectedLabel = index.types[expected]?.name ?: expected.substringAfterLast('.').ifBlank { "template data" }
+            return """
+                <div class="definition"><b>template</b> <code>${escape(reference.templateName)}</code></div>
+                <div class="content">Expects <code>${escape(expectedLabel)}</code>.</div>
+                <div class="sections"><p>${escape(reference.templatePath)}</p></div>
+            """.trimIndent()
+        }
+
         val contract = index.contractForFile(project, virtualFile.path) ?: return null
         GoDocTemplateContext.templateFunctionAt(file.text, source.textOffset, index, contract)?.let { reference ->
             val fn = index.funcs[reference.funcName] ?: return null
@@ -55,6 +66,13 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
 
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
+        GoDocTemplateContext.templateIncludeAt(file.text, source.textOffset, index)?.let { reference ->
+            val child = index.templates[reference.templatePath]
+            val expected = child?.dot?.let { index.resolveGoType(it) ?: it }.orEmpty()
+            val expectedLabel = index.types[expected]?.name ?: expected.substringAfterLast('.').ifBlank { "template data" }
+            return "template ${reference.templateName} expects $expectedLabel"
+        }
+
         val contract = index.contractForFile(project, virtualFile.path) ?: return null
         GoDocTemplateContext.templateFunctionAt(file.text, source.textOffset, index, contract)?.let { reference ->
             val fn = index.funcs[reference.funcName] ?: return null

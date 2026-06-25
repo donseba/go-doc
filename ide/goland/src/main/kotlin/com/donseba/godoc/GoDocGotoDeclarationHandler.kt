@@ -21,6 +21,10 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
 
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
+        GoDocTemplateContext.templateIncludeAt(file.text, offset, index)?.let { reference ->
+            return targetElement(project, index, reference.templatePath, 1, 1)
+        }
+
         val contract = index.contractForFile(project, virtualFile.path) ?: return null
         GoDocTemplateContext.templateFunctionAt(file.text, offset, index, contract)?.let { reference ->
             val fn = index.funcs[reference.funcName] ?: return null

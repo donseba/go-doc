@@ -126,6 +126,95 @@ func TestLSPDiagnosticsIgnoreQuotedTemplateNames(t *testing.T) {
 	}
 }
 
+func TestLSPDiagnosticsValidateTemplateIncludeDotType(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Templates: map[string]templateIndex{
+			"templates/page.gohtml": {
+				Models: map[string]string{"Page": "example.com/app.Page"},
+			},
+			"templates/user_row.gohtml": {
+				Dot: "example.com/app.User",
+			},
+		},
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name: "Page",
+				Fields: map[string]fieldIndex{
+					"Users": {Type: "[]User"},
+					"Title": {Type: "string"},
+				},
+			},
+			"example.com/app.User": {
+				Name:   "User",
+				Fields: map[string]fieldIndex{"Name": {Type: "string"}},
+			},
+		},
+		Short: map[string][]string{
+			"User": {"example.com/app.User"},
+		},
+	}}
+	contract := idx.Templates["templates/page.gohtml"]
+
+	valid := diagnosticsForText(`{{ range Page.Users }}{{ template "user_row.gohtml" . }}{{ end }}`, idx, contract)
+	if len(valid) != 0 {
+		t.Fatalf("diagnostics = %#v, want valid row include", valid)
+	}
+
+	invalidSlice := diagnosticsForText(`{{ template "user_row.gohtml" Page.Users }}`, idx, contract)
+	assertDiagnostic(t, invalidSlice, "Template user_row.gohtml expects User, got []User")
+
+	invalidString := diagnosticsForText(`{{ template "user_row.gohtml" Page.Title }}`, idx, contract)
+	assertDiagnostic(t, invalidString, "Template user_row.gohtml expects User, got string")
+}
+
+func TestLSPTemplateIncludeHoverAndDefinition(t *testing.T) {
+	root := t.TempDir()
+	idx := indexFile{
+		Templates: map[string]templateIndex{
+			"templates/page.gohtml":     {Models: map[string]string{"Page": "example.com/app.Page"}},
+			"templates/user_row.gohtml": {Dot: "example.com/app.User"},
+		},
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {Name: "Page"},
+			"example.com/app.User": {Name: "User", File: "models.go", Line: 7, Column: 6},
+		},
+		Short: map[string][]string{"User": {"example.com/app.User"}},
+	}
+	text := `{{ template "user_row.gohtml" Page }}`
+	uri := uriFromPath(filepath.Join(root, "templates", "page.gohtml"))
+	server := &lspServer{
+		root: root,
+		idx:  idx,
+		docs: map[string]string{uri: text},
+	}
+	pos := positionAt(text, strings.Index(text, "user_row.gohtml")+1)
+
+	hoverResult := server.hover(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     pos,
+	})
+	gotHover, ok := hoverResult.(hover)
+	if !ok {
+		t.Fatalf("hover result = %#v", hoverResult)
+	}
+	contents, ok := gotHover.Contents.(map[string]string)
+	if !ok || !strings.Contains(contents["value"], "Expects `User`.") {
+		t.Fatalf("hover contents = %#v, want expected child dot type", gotHover.Contents)
+	}
+
+	definitionResult := server.definition(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     pos,
+	})
+	gotDefinition, ok := definitionResult.(location)
+	if !ok {
+		t.Fatalf("definition result = %#v", definitionResult)
+	}
+	if !strings.Contains(filepath.ToSlash(gotDefinition.URI), "templates/user_row.gohtml") {
+		t.Fatalf("definition URI = %q, want child template", gotDefinition.URI)
+	}
+}
+
 func TestLSPUnderstandsDeclaredTemplateFunctions(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Funcs: map[string]goFuncIndex{

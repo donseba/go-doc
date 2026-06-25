@@ -1,0 +1,19 @@
+{{/*
+@dot github.com/donseba/go-doc/examples/showcase.User
+*/}}
+{{ define "user_row.gohtml" }}
+<tr>
+    <td>{{ .ID }}</td>
+    <td>
+        <strong>{{ .Name }}</strong>
+        <small>{{ .Email }}</small>
+    </td>
+    <td><code>{{ .Role }}</code></td>
+    <td><span class="badge">{{ .Status }}</span></td>
+    <td>
+        {{ range .Permissions }}
+            <span class="pill">{{ .Name }}: {{ .Level }}</span>
+        {{ end }}
+    </td>
+</tr>
+{{ end }}

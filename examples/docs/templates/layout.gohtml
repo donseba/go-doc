@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ .Title }} - go-doc</title>
+    <link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+    {{ template "header.gohtml" . }}
+    <div class="shell">
+        {{ template "sidebar.gohtml" . }}
+        <main class="content">
+            <p class="eyebrow">{{ .Section }}</p>
+            <h1>{{ .Title }}</h1>
+            <p class="lead">{{ .Description }}</p>
+            {{ template "content" . }}
+        </main>
+    </div>
+</body>
+</html>

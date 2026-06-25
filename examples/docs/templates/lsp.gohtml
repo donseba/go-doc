@@ -1,0 +1,14 @@
+{{ define "content" }}
+<h2>Understood template shapes</h2>
+<ul class="docs-list">
+    <li>Root model access: <code>{{`{{ Page.Title }}`}}</code></li>
+    <li>Dot in ranges: <code>{{`{{ range Page.Items }}{{ .ID }}{{ end }}`}}</code></li>
+    <li>Assigned variables: <code>{{`{{ range $item := Page.Items }}{{ $item.Title }}{{ end }}`}}</code></li>
+    <li>Function results: <code>{{`{{ with firstUser }}{{ .Name }}{{ end }}`}}</code></li>
+    <li>Parenthesized function calls: <code>{{`{{ (userByID 2).Name }}`}}</code></li>
+    <li>Subtemplate dot contracts through <code>@dot</code>.</li>
+</ul>
+
+<h2>Diagnostics</h2>
+<p>The LSP validates unknown accessors, invalid field names, non-rangeable expressions, unsupported function returns, and incorrect function arguments.</p>
+{{ end }}

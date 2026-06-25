@@ -313,6 +313,16 @@ class GoDocIndex(
         return mergeInlineContract(path, base)
     }
 
+    fun templateByName(name: String): Pair<String, TemplateContract>? {
+        val normalized = name.trimStart('/').replace('\\', '/')
+        return templates.entries.firstOrNull { (path, _) ->
+            val templatePath = path.replace('\\', '/')
+            templatePath == normalized ||
+                templatePath.substringAfterLast('/') == normalized ||
+                templatePath.endsWith("/$normalized")
+        }?.let { it.key to it.value }
+    }
+
     fun fieldsForType(typeName: String?): Map<String, GoDocField> {
         return types[typeName]?.fields.orEmpty()
     }

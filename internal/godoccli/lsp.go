@@ -260,6 +260,7 @@ var (
 	lspAssignmentPattern  = regexp.MustCompile(`^\s*(\$[A-Za-z][A-Za-z0-9_]*)\s*:=\s*(.+?)\s*$`)
 	lspActionPattern      = regexp.MustCompile(`\{\{[^}]*\}\}`)
 	lspAccessorPattern    = regexp.MustCompile(`(?:[$_A-Za-z][$_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)+|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)`)
+	lspTemplateCallRegexp = regexp.MustCompile(`^\s*template\s+"([^"]+)"(?:\s+(.+?))?\s*-?\s*$`)
 	lspContractTypeRegexp = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
 	lspModelPrefixRegexp  = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z0-9_./-]*$`)
 	lspDotTypeRegexp      = regexp.MustCompile(`@dot\s+([A-Za-z0-9_./-]+)`)
@@ -1049,6 +1050,9 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 		if item, ok := pipelineFunctionDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
 			items = append(items, item)
 		}
+		if item, ok := templateIncludeDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+			items = append(items, item)
+		}
 		for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
 			if inQuotedString(actionText, match[0]) {
 				continue
@@ -1097,6 +1101,145 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 		}
 	}
 	return items
+}
+
+func templateIncludeDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
+	content, contentOffset, ok := actionContent(actionText)
+	if !ok {
+		return diagnostic{}, false
+	}
+	match := lspTemplateCallRegexp.FindStringSubmatchIndex(content)
+	if len(match) == 0 {
+		return diagnostic{}, false
+	}
+	name := content[match[2]:match[3]]
+	child, _, ok := templateContractByName(idx, name)
+	if !ok || child.Dot == "" {
+		return diagnostic{}, false
+	}
+	if match[4] < 0 || match[5] < 0 {
+		return diagnostic{}, false
+	}
+	rawExpression := content[match[4]:match[5]]
+	trimmed := strings.TrimRight(strings.TrimSpace(rawExpression), "- ")
+	if trimmed == "" {
+		return diagnostic{}, false
+	}
+	expressionLeading := strings.Index(rawExpression, strings.TrimLeft(rawExpression, " \t\r\n"))
+	if expressionLeading < 0 {
+		expressionLeading = 0
+	}
+	expressionStart := actionStart + contentOffset + match[4] + expressionLeading
+	currentScope := scopeAt(text, actionStart, idx, contract)
+	actual := resolveExpressionValueType(idx, contract, trimmed, currentScope.dotType)
+	expected := resolveGoType(idx, child.Dot)
+	if expected == "" {
+		expected = child.Dot
+	}
+	if actual == "" || expected == "" || sameTemplateDotType(idx, actual, expected) {
+		return diagnostic{}, false
+	}
+	return diagnostic{
+		Range:    rangeFromOffsets(text, expressionStart, expressionStart+len(trimmed)),
+		Severity: 2,
+		Source:   "go-doc",
+		Message:  fmt.Sprintf("Template %s expects %s, got %s", name, shortTypeName(expected), shortTypeName(actual)),
+	}, true
+}
+
+func templateContractByName(idx lspIndex, name string) (templateIndex, string, bool) {
+	normalized := filepath.ToSlash(strings.TrimPrefix(name, "/"))
+	for path, contract := range idx.Templates {
+		templatePath := filepath.ToSlash(path)
+		if templatePath == normalized || pathBase(templatePath) == normalized || strings.HasSuffix(templatePath, "/"+normalized) {
+			return contract, path, true
+		}
+	}
+	return templateIndex{}, "", false
+}
+
+func pathBase(path string) string {
+	clean := strings.TrimRight(filepath.ToSlash(path), "/")
+	if clean == "" {
+		return ""
+	}
+	if slash := strings.LastIndex(clean, "/"); slash >= 0 {
+		return clean[slash+1:]
+	}
+	return clean
+}
+
+func sameTemplateDotType(idx lspIndex, left, right string) bool {
+	left = comparableDotType(idx, left)
+	right = comparableDotType(idx, right)
+	return left != "" && right != "" && left == right
+}
+
+func comparableDotType(idx lspIndex, typeExpr string) string {
+	normalized := stripPointer(strings.TrimSpace(typeExpr))
+	if isCompositeValueType(normalized) {
+		return normalized
+	}
+	if resolved := resolveGoType(idx, normalized); resolved != "" {
+		return resolved
+	}
+	return normalized
+}
+
+func actionContent(actionText string) (string, int, bool) {
+	start := strings.Index(actionText, "{{")
+	end := strings.LastIndex(actionText, "}}")
+	if start < 0 || end < start {
+		return "", 0, false
+	}
+	contentStart := start + len("{{")
+	for contentStart < end && (actionText[contentStart] == '-' || isSpaceByte(actionText[contentStart])) {
+		contentStart++
+	}
+	contentEnd := end
+	for contentEnd > contentStart && (actionText[contentEnd-1] == '-' || isSpaceByte(actionText[contentEnd-1])) {
+		contentEnd--
+	}
+	return actionText[contentStart:contentEnd], contentStart, true
+}
+
+type templateIncludeRef struct {
+	name  string
+	path  string
+	start int
+	end   int
+}
+
+func templateIncludeReferenceAt(text string, offset int, idx lspIndex) (templateIncludeRef, bool) {
+	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
+		if offset < action[0] || offset > action[1] {
+			continue
+		}
+		actionText := text[action[0]:action[1]]
+		if isTemplateCommentAction(actionText) {
+			return templateIncludeRef{}, false
+		}
+		content, contentOffset, ok := actionContent(actionText)
+		if !ok {
+			return templateIncludeRef{}, false
+		}
+		match := lspTemplateCallRegexp.FindStringSubmatchIndex(content)
+		if len(match) == 0 {
+			return templateIncludeRef{}, false
+		}
+		nameStart := action[0] + contentOffset + match[2]
+		nameEnd := action[0] + contentOffset + match[3]
+		if offset < nameStart || offset > nameEnd {
+			return templateIncludeRef{}, false
+		}
+		name := content[match[2]:match[3]]
+		_, path, ok := templateContractByName(idx, name)
+		if !ok {
+			return templateIncludeRef{}, false
+		}
+		return templateIncludeRef{name: name, path: path, start: nameStart, end: nameEnd}, true
+	}
+	return templateIncludeRef{}, false
 }
 
 func tokenRoot(token string) string {
@@ -1837,6 +1980,20 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 	if !ok {
 		return nil
 	}
+	if ref, ok := templateIncludeReferenceAt(text, offset, idx); ok {
+		child, _, _ := templateContractByName(idx, ref.name)
+		expected := resolveGoType(idx, child.Dot)
+		if expected == "" {
+			expected = child.Dot
+		}
+		if expected == "" {
+			expected = "template data"
+		}
+		return hover{
+			Contents: markdown(fmt.Sprintf("```gotemplate\ntemplate %q\n```\nExpects `%s`.", ref.name, shortTypeName(expected))),
+			Range:    rangeFromOffsets(text, ref.start, ref.end),
+		}
+	}
 	if name, start, end, ok := templateFunctionAt(text, offset, idx, contract); ok {
 		if fn, builtIn := builtInTemplateFuncs[name]; builtIn {
 			return hover{
@@ -1896,6 +2053,9 @@ func (s *lspServer) definition(params textDocumentPositionParams) any {
 	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
 	if !ok {
 		return nil
+	}
+	if ref, ok := templateIncludeReferenceAt(text, offset, idx); ok {
+		return locationForTarget(idx.rootPath, ref.path, 1, 1)
 	}
 	if name, _, _, ok := templateFunctionAt(text, offset, idx, contract); ok {
 		if fnName := contract.Funcs[name]; fnName != "" {

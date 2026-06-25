@@ -1,0 +1,12 @@
+{{ define "content" }}
+<h2>Index command</h2>
+<pre><code>go-doc index -o .go-doc/index.json .</code></pre>
+
+<h2>Configuration</h2>
+<pre><code>{
+  "include": ["/"],
+  "exclude": ["vendor"]
+}</code></pre>
+
+<p>The scanner uses Go package information, so exported structs, fields, methods, aliases, imports, generics, and function return types are resolved through Go tooling rather than string guessing.</p>
+{{ end }}

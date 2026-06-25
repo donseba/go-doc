@@ -1,0 +1,39 @@
+{{ define "content" }}
+<div class="actions">
+    <a class="button primary" href="/docs/install">Get started</a>
+    <a class="button" href="/docs/contracts">Read contracts</a>
+    <a class="button" href="http://localhost:8102">Open showcase</a>
+</div>
+
+<section class="grid">
+    <a class="card" href="/docs/contracts">
+        <strong>Declare template data</strong>
+        <p>Use <code>@model</code>, <code>@dot</code>, and <code>@func</code> to tell the editor what each template receives and calls.</p>
+    </a>
+    <a class="card" href="/docs/editor">
+        <strong>Upgrade the editor</strong>
+        <p>Completion, diagnostics, hover, navigation, rename, and quick fixes for normal Go templates.</p>
+    </a>
+    <a class="card" href="/docs/renderer">
+        <strong>Keep runtime boring</strong>
+        <p>Your app still uses <code>html/template</code>. The optional renderer only registers contract values.</p>
+    </a>
+    <a class="card" href="/docs/ecosystem">
+        <strong>Part of a stack</strong>
+        <p>A companion to go-partial, go-translator, go-form, go-importmap, and the future docs hub.</p>
+    </a>
+</section>
+
+<h2>The small idea</h2>
+<pre><code>&#123;&#123;/*
+&#64;model Page github.com/example/app.Page
+*/&#125;&#125;
+
+&lt;h1&gt;&#123;&#123; Page.Title &#125;&#125;&lt;/h1&gt;
+
+&#123;&#123; range Page.Items &#125;&#125;
+    &lt;a href="/items/&#123;&#123; .ID &#125;&#125;"&gt;&#123;&#123; .Label &#125;&#125;&lt;/a&gt;
+&#123;&#123; end &#125;&#125;</code></pre>
+
+<p>Go templates stay simple at runtime. The annotation gives tools enough information to understand what the template means.</p>
+{{ end }}

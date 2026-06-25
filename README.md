@@ -1,5 +1,3 @@
-# go-doc
-
 <p align="center">
     <img src="./assets/go-doc-logo.png" alt="go-doc" width="420">
 </p>
