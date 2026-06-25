@@ -135,6 +135,12 @@ func TestLSPDiagnosticsValidateTemplateIncludeDotType(t *testing.T) {
 			"templates/user_row.gohtml": {
 				Dot: "example.com/app.User",
 			},
+			"templates/rows.gohtml#table_row": {
+				Name:   "table_row",
+				Dot:    "example.com/app.User",
+				Source: "templates/rows.gohtml",
+				Line:   3,
+			},
 		},
 		Types: map[string]goTypeIndex{
 			"example.com/app.Page": {
@@ -165,14 +171,23 @@ func TestLSPDiagnosticsValidateTemplateIncludeDotType(t *testing.T) {
 
 	invalidString := diagnosticsForText(`{{ template "user_row.gohtml" Page.Title }}`, idx, contract)
 	assertDiagnostic(t, invalidString, "Template user_row.gohtml expects User, got string")
+
+	validBlock := diagnosticsForText(`{{ range Page.Users }}{{ block "table_row" . }}{{ end }}{{ end }}`, idx, contract)
+	if len(validBlock) != 0 {
+		t.Fatalf("diagnostics = %#v, want valid named block include", validBlock)
+	}
+
+	invalidBlock := diagnosticsForText(`{{ block "table_row" Page.Title }}{{ end }}`, idx, contract)
+	assertDiagnostic(t, invalidBlock, "Template table_row expects User, got string")
 }
 
 func TestLSPTemplateIncludeHoverAndDefinition(t *testing.T) {
 	root := t.TempDir()
 	idx := indexFile{
 		Templates: map[string]templateIndex{
-			"templates/page.gohtml":     {Models: map[string]string{"Page": "example.com/app.Page"}},
-			"templates/user_row.gohtml": {Dot: "example.com/app.User"},
+			"templates/page.gohtml":           {Models: map[string]string{"Page": "example.com/app.Page"}},
+			"templates/user_row.gohtml":       {Dot: "example.com/app.User"},
+			"templates/rows.gohtml#table_row": {Name: "table_row", Dot: "example.com/app.User", Source: "templates/rows.gohtml", Line: 5, Column: 3},
 		},
 		Types: map[string]goTypeIndex{
 			"example.com/app.Page": {Name: "Page"},
@@ -212,6 +227,62 @@ func TestLSPTemplateIncludeHoverAndDefinition(t *testing.T) {
 	}
 	if !strings.Contains(filepath.ToSlash(gotDefinition.URI), "templates/user_row.gohtml") {
 		t.Fatalf("definition URI = %q, want child template", gotDefinition.URI)
+	}
+
+	blockText := `{{ block "table_row" Page }}{{ end }}`
+	blockURI := uriFromPath(filepath.Join(root, "templates", "table.gohtml"))
+	server.docs[blockURI] = blockText
+	blockPos := positionAt(blockText, strings.Index(blockText, "table_row")+1)
+	blockDefinition := server.definition(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: blockURI},
+		Position:     blockPos,
+	})
+	gotBlockDefinition, ok := blockDefinition.(location)
+	if !ok {
+		t.Fatalf("block definition result = %#v", blockDefinition)
+	}
+	if !strings.Contains(filepath.ToSlash(gotBlockDefinition.URI), "templates/rows.gohtml") ||
+		gotBlockDefinition.Range.Start.Line != 4 {
+		t.Fatalf("block definition = %#v, want named define location", gotBlockDefinition)
+	}
+}
+
+func TestLSPWarnsAndMovesLeadingDefineContract(t *testing.T) {
+	text := `{{/*
+@dot example.com/app.User
+*/}}
+{{ define "table_row" }}
+<tr><td>{{ .Name }}</td></tr>
+{{ end }}`
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.User": {Name: "User", Fields: map[string]fieldIndex{"Name": {Type: "string"}}},
+		},
+	}}
+	contract := templateIndex{Dot: "example.com/app.User"}
+	diagnostics := diagnosticsForText(text, idx, contract)
+	assertDiagnostic(t, diagnostics, `Move go-doc annotations inside define "table_row"`)
+
+	uri := "file:///rows.gohtml"
+	server := &lspServer{
+		root: ".",
+		idx:  idx.indexFile,
+		docs: map[string]string{uri: text},
+	}
+	actions := server.codeActions(codeActionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Range:        diagnostics[0].Range,
+		Context:      codeActionContext{Diagnostics: []diagnostic{diagnostics[0]}},
+	})
+	if len(actions) != 1 || actions[0].Edit == nil {
+		t.Fatalf("actions = %#v, want move edit", actions)
+	}
+	edits := actions[0].Edit.Changes[uri]
+	if len(edits) != 2 {
+		t.Fatalf("edits = %#v, want delete and insert", edits)
+	}
+	if edits[1].NewText != "\n{{/*\n@dot example.com/app.User\n*/}}\n" {
+		t.Fatalf("insert text = %q", edits[1].NewText)
 	}
 }
 
@@ -258,6 +329,60 @@ func TestLSPDiagnosticsWarnsForInvalidDeclaredFunctionArgument(t *testing.T) {
 	assertDiagnostic(t, diagnostics, "Cannot pass string to div argument 2 because it expects int")
 	if len(diagnostics) != 1 {
 		t.Fatalf("diagnostics = %#v, want one invalid argument diagnostic", diagnostics)
+	}
+}
+
+func TestLSPUnderstandsElseIfConditions(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name: "Page",
+				Fields: map[string]fieldIndex{
+					"Items":       {Type: "[]Todo"},
+					"Ready":       {Type: "bool"},
+					"Title":       {Type: "string"},
+					"GeneratedAt": {Type: "time.Time"},
+				},
+			},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.IsReady": {Name: "IsReady", Signature: "func IsReady(v bool) bool", Params: []string{"bool"}, Result: "bool"},
+		},
+		Short: map[string][]string{"Todo": {"example.com/app.Todo"}},
+	}}
+	contract := templateIndex{
+		Models: map[string]string{"Page": "example.com/app.Page"},
+		Funcs:  map[string]string{"isReady": "example.com/app.IsReady"},
+	}
+
+	if got := diagnosticsForText(`{{ if Page.Ready }}A{{ else if Page.Ready }}B{{ end }}`, idx, contract); len(got) != 0 {
+		t.Fatalf("diagnostics = %#v, want no diagnostics for valid else-if model condition", got)
+	}
+
+	diagnostics := diagnosticsForText(`{{ if Page.Ready }}A{{ else if Page.Missing }}B{{ end }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Unknown field 'Missing' on Page")
+
+	diagnostics = diagnosticsForText(`{{ if Page.Ready }}A{{ else if isReady Page.Title }}B{{ end }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Cannot pass string to isReady argument 1 because it expects bool")
+
+	diagnostics = diagnosticsForText(`{{ if Page.Ready }}A{{ else if len Page.GeneratedAt }}B{{ end }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Cannot call len on 'Page.GeneratedAt' because it is time.Time")
+
+	text := `{{ if Page.Ready }}A{{ else if isReady Page.Ready }}B{{ end }}`
+	tokens := semanticTokensForText(text, idx, contract)
+	foundFunction := false
+	foundField := false
+	for _, token := range tokens {
+		value := text[token.start : token.start+token.length]
+		if token.tokenType == semanticFunction && value == "isReady" {
+			foundFunction = true
+		}
+		if token.tokenType == semanticField && value == "Ready" {
+			foundField = true
+		}
+	}
+	if !foundFunction || !foundField {
+		t.Fatalf("tokens = %#v, want else-if function and field tokens", tokens)
 	}
 }
 

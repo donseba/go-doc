@@ -11,6 +11,19 @@
         "userByID": "github.com/donseba/go-doc/examples/showcase.UserByID"
       }
     },
+    "templates/contracts.gohtml#content": {
+      "name": "content",
+      "models": {
+        "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
+      },
+      "funcs": {
+        "firstUser": "github.com/donseba/go-doc/examples/showcase.FirstUser",
+        "userByID": "github.com/donseba/go-doc/examples/showcase.UserByID"
+      },
+      "source": "templates/contracts.gohtml",
+      "line": 7,
+      "column": 1
+    },
     "templates/home.gohtml": {
       "models": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
@@ -19,6 +32,19 @@
         "firstUser": "github.com/donseba/go-doc/examples/showcase.FirstUser",
         "userByID": "github.com/donseba/go-doc/examples/showcase.UserByID"
       }
+    },
+    "templates/home.gohtml#content": {
+      "name": "content",
+      "models": {
+        "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
+      },
+      "funcs": {
+        "firstUser": "github.com/donseba/go-doc/examples/showcase.FirstUser",
+        "userByID": "github.com/donseba/go-doc/examples/showcase.UserByID"
+      },
+      "source": "templates/home.gohtml",
+      "line": 7,
+      "column": 1
     },
     "templates/layout.gohtml": {
       "models": {
@@ -38,13 +64,42 @@
         "userByID": "github.com/donseba/go-doc/examples/showcase.UserByID"
       }
     },
+    "templates/table.gohtml#content": {
+      "name": "content",
+      "models": {
+        "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
+      },
+      "funcs": {
+        "firstUser": "github.com/donseba/go-doc/examples/showcase.FirstUser",
+        "userByID": "github.com/donseba/go-doc/examples/showcase.UserByID"
+      },
+      "source": "templates/table.gohtml",
+      "line": 7,
+      "column": 1
+    },
     "templates/user_card.gohtml": {
       "models": {},
       "dot": "github.com/donseba/go-doc/examples/showcase.User"
     },
+    "templates/user_card.gohtml#user_card.gohtml": {
+      "name": "user_card.gohtml",
+      "models": {},
+      "dot": "github.com/donseba/go-doc/examples/showcase.User",
+      "source": "templates/user_card.gohtml",
+      "line": 1,
+      "column": 1
+    },
     "templates/user_row.gohtml": {
       "models": {},
       "dot": "github.com/donseba/go-doc/examples/showcase.User"
+    },
+    "templates/user_row.gohtml#user_row.gohtml": {
+      "name": "user_row.gohtml",
+      "models": {},
+      "dot": "github.com/donseba/go-doc/examples/showcase.User",
+      "source": "templates/user_row.gohtml",
+      "line": 1,
+      "column": 1
     }
   },
   "types": {

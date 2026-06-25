@@ -127,6 +127,76 @@ type User struct {
 	}
 }
 
+func TestBuildIndexScansNamedDefineContracts(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "user.go", `package app
+
+type User struct {
+	Name string
+}
+`)
+	writeFile(t, root, "templates/rows.gohtml", `{{/*
+@dot User
+*/}}
+{{ define "table_row" }}
+<tr><td>{{ .Name }}</td></tr>
+{{ end }}
+`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed for @dot annotations in named defines")
+	}
+	contract := idx.Templates["templates/rows.gohtml#table_row"]
+	if contract.Name != "table_row" {
+		t.Fatalf("table_row name = %q", contract.Name)
+	}
+	if contract.Dot != "example.com/app.User" {
+		t.Fatalf("table_row @dot = %q, want User", contract.Dot)
+	}
+	if contract.Source != "templates/rows.gohtml" || contract.Line != 4 || contract.Column != 1 {
+		t.Fatalf("table_row source = %#v, want define source position", contract)
+	}
+}
+
+func TestBuildIndexPrefersInsideDefineContract(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "user.go", `package app
+
+type User struct {
+	Name string
+}
+
+type Admin struct {
+	Name string
+}
+`)
+	writeFile(t, root, "templates/rows.gohtml", `{{/*
+@dot User
+*/}}
+{{ define "table_row" }}
+{{/*
+@dot Admin
+*/}}
+<tr><td>{{ .Name }}</td></tr>
+{{ end }}
+`)
+
+	idx, _, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	contract := idx.Templates["templates/rows.gohtml#table_row"]
+	if contract.Dot != "example.com/app.Admin" {
+		t.Fatalf("table_row @dot = %q, want inside define contract to win", contract.Dot)
+	}
+}
+
 func TestBuildIndexUsesGoTypesForImportsAliasesAndGenerics(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")

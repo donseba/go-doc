@@ -255,16 +255,17 @@ const (
 )
 
 var (
-	lspRangePattern       = regexp.MustCompile(`\{\{\s*-?\s*(range|with|end)\b([^}]*)\}\}`)
-	lspScopeActionPattern = regexp.MustCompile(`\{\{\s*-?\s*([^}]*)\}\}`)
-	lspAssignmentPattern  = regexp.MustCompile(`^\s*(\$[A-Za-z][A-Za-z0-9_]*)\s*:=\s*(.+?)\s*$`)
-	lspActionPattern      = regexp.MustCompile(`\{\{[^}]*\}\}`)
-	lspAccessorPattern    = regexp.MustCompile(`(?:[$_A-Za-z][$_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)+|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)`)
-	lspTemplateCallRegexp = regexp.MustCompile(`^\s*template\s+"([^"]+)"(?:\s+(.+?))?\s*-?\s*$`)
-	lspContractTypeRegexp = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
-	lspModelPrefixRegexp  = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z0-9_./-]*$`)
-	lspDotTypeRegexp      = regexp.MustCompile(`@dot\s+([A-Za-z0-9_./-]+)`)
-	lspFuncTypeRegexp     = regexp.MustCompile(`@func\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
+	lspRangePattern                = regexp.MustCompile(`\{\{\s*-?\s*(range|with|end)\b([^}]*)\}\}`)
+	lspScopeActionPattern          = regexp.MustCompile(`\{\{\s*-?\s*([^}]*)\}\}`)
+	lspAssignmentPattern           = regexp.MustCompile(`^\s*(\$[A-Za-z][A-Za-z0-9_]*)\s*:=\s*(.+?)\s*$`)
+	lspActionPattern               = regexp.MustCompile(`\{\{[^}]*\}\}`)
+	lspAccessorPattern             = regexp.MustCompile(`(?:[$_A-Za-z][$_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)+|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)`)
+	lspTemplateCallRegexp          = regexp.MustCompile(`^\s*(?:template|block)\s+"([^"]+)"(?:\s+(.+?))?\s*-?\s*$`)
+	lspLeadingDefineContractRegexp = regexp.MustCompile(`(?s)(\{\{/\*.*?@(model|dot|func).*?\*/\}\})([ \t\r\n]*)(\{\{\s*(?:-)?\s*define\s+"([^"]+)"\s*(?:-)?\s*\}\})`)
+	lspContractTypeRegexp          = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
+	lspModelPrefixRegexp           = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z0-9_./-]*$`)
+	lspDotTypeRegexp               = regexp.MustCompile(`@dot\s+([A-Za-z0-9_./-]+)`)
+	lspFuncTypeRegexp              = regexp.MustCompile(`@func\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
 )
 
 type templateFuncInfo struct {
@@ -972,6 +973,7 @@ func (s *lspServer) publishDiagnostics(uri string) error {
 
 func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []diagnostic {
 	var items []diagnostic
+	items = append(items, leadingDefineContractDiagnostics(text)...)
 	for _, match := range lspContractTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
 		start, end := match[2], match[3]
 		raw := text[start:end]
@@ -1103,6 +1105,21 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 	return items
 }
 
+func leadingDefineContractDiagnostics(text string) []diagnostic {
+	var items []diagnostic
+	for _, match := range lspLeadingDefineContractRegexp.FindAllStringSubmatchIndex(text, -1) {
+		commentStart, commentEnd := match[2], match[3]
+		name := text[match[10]:match[11]]
+		items = append(items, diagnostic{
+			Range:    rangeFromOffsets(text, commentStart, commentEnd),
+			Severity: 3,
+			Source:   "go-doc",
+			Message:  fmt.Sprintf("Move go-doc annotations inside define %q", name),
+		})
+	}
+	return items
+}
+
 func templateIncludeDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
 	content, contentOffset, ok := actionContent(actionText)
 	if !ok {
@@ -1151,7 +1168,10 @@ func templateContractByName(idx lspIndex, name string) (templateIndex, string, b
 	normalized := filepath.ToSlash(strings.TrimPrefix(name, "/"))
 	for path, contract := range idx.Templates {
 		templatePath := filepath.ToSlash(path)
-		if templatePath == normalized || pathBase(templatePath) == normalized || strings.HasSuffix(templatePath, "/"+normalized) {
+		if contract.Name == normalized ||
+			templatePath == normalized ||
+			pathBase(templatePath) == normalized ||
+			strings.HasSuffix(templatePath, "/"+normalized) {
 			return contract, path, true
 		}
 	}
@@ -1573,6 +1593,7 @@ func templatePipelineSegments(actionText string) []templateSegment {
 	for start < close && (isSpaceByte(actionText[start]) || actionText[start] == '-') {
 		start++
 	}
+	start = skipConditionalPrefix(actionText, start, close)
 	var segments []templateSegment
 	segmentStart := start
 	inQuote := false
@@ -1976,10 +1997,6 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 			Range:    rangeFromOffsets(text, ref.start, ref.end),
 		}
 	}
-	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
-	if !ok {
-		return nil
-	}
 	if ref, ok := templateIncludeReferenceAt(text, offset, idx); ok {
 		child, _, _ := templateContractByName(idx, ref.name)
 		expected := resolveGoType(idx, child.Dot)
@@ -1993,6 +2010,10 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 			Contents: markdown(fmt.Sprintf("```gotemplate\ntemplate %q\n```\nExpects `%s`.", ref.name, shortTypeName(expected))),
 			Range:    rangeFromOffsets(text, ref.start, ref.end),
 		}
+	}
+	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
+	if !ok {
+		return nil
 	}
 	if name, start, end, ok := templateFunctionAt(text, offset, idx, contract); ok {
 		if fn, builtIn := builtInTemplateFuncs[name]; builtIn {
@@ -2050,12 +2071,21 @@ func (s *lspServer) definition(params textDocumentPositionParams) any {
 		fn := idx.Funcs[ref.funcName]
 		return locationForTarget(idx.rootPath, fn.File, fn.Line, fn.Column)
 	}
+	if ref, ok := templateIncludeReferenceAt(text, offset, idx); ok {
+		child, _, _ := templateContractByName(idx, ref.name)
+		targetPath := ref.path
+		targetLine := 1
+		targetColumn := 1
+		if child.Source != "" {
+			targetPath = child.Source
+			targetLine = child.Line
+			targetColumn = child.Column
+		}
+		return locationForTarget(idx.rootPath, targetPath, targetLine, targetColumn)
+	}
 	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
 	if !ok {
 		return nil
-	}
-	if ref, ok := templateIncludeReferenceAt(text, offset, idx); ok {
-		return locationForTarget(idx.rootPath, ref.path, 1, 1)
 	}
 	if name, _, _, ok := templateFunctionAt(text, offset, idx, contract); ok {
 		if fnName := contract.Funcs[name]; fnName != "" {
@@ -2157,9 +2187,41 @@ func (s *lspServer) codeActions(params codeActionParams) []codeAction {
 				actions = append(actions, action)
 				seen[action.Title] = true
 			}
+		case strings.HasPrefix(item.Message, "Move go-doc annotations inside define "):
+			action, ok := moveDefineContractCodeAction(params.TextDocument.URI, text, item)
+			if ok && !seen[action.Title] {
+				actions = append(actions, action)
+				seen[action.Title] = true
+			}
 		}
 	}
 	return actions
+}
+
+func moveDefineContractCodeAction(uri string, text string, item diagnostic) (codeAction, bool) {
+	warningOffset := offsetAt(text, item.Range.Start)
+	for _, match := range lspLeadingDefineContractRegexp.FindAllStringSubmatchIndex(text, -1) {
+		commentStart, commentEnd := match[2], match[3]
+		if warningOffset < commentStart || warningOffset > commentEnd {
+			continue
+		}
+		removeEnd := match[8]
+		defineEnd := match[9]
+		comment := strings.TrimSpace(text[commentStart:commentEnd])
+		newText := "\n" + comment + "\n"
+		return codeAction{
+			Title:       "Move go-doc annotations inside define",
+			Kind:        "quickfix",
+			Diagnostics: []diagnostic{item},
+			Edit: &workspaceEdit{Changes: map[string][]textEdit{
+				uri: {
+					{Range: rangeFromOffsets(text, commentStart, removeEnd), NewText: ""},
+					{Range: rangeFromOffsets(text, defineEnd, defineEnd), NewText: newText},
+				},
+			}},
+		}, true
+	}
+	return codeAction{}, false
 }
 
 func missingFieldCodeAction(text string, idx lspIndex, contract templateIndex, item diagnostic) (codeAction, bool) {
@@ -2606,6 +2668,14 @@ func firstCommandInAction(actionText string) (string, int, int, bool) {
 	for start < len(actionText) && (actionText[start] == '-' || actionText[start] == ' ' || actionText[start] == '\t' || actionText[start] == '\r' || actionText[start] == '\n') {
 		start++
 	}
+	close := strings.LastIndex(actionText, "}}")
+	if close < 0 {
+		close = len(actionText)
+	}
+	start = skipConditionalPrefix(actionText, start, close)
+	for start < close && (actionText[start] == '-' || isSpaceByte(actionText[start])) {
+		start++
+	}
 	end := start
 	for end < len(actionText) && isTokenChar(actionText[end]) {
 		end++
@@ -2614,6 +2684,39 @@ func firstCommandInAction(actionText string) (string, int, int, bool) {
 		return "", 0, 0, false
 	}
 	return actionText[start:end], start, end, true
+}
+
+func skipConditionalPrefix(text string, start, end int) int {
+	token, tokenStart, tokenEnd, ok := nextActionToken(text, start, end)
+	if !ok {
+		return start
+	}
+	switch token {
+	case "if":
+		return tokenEnd
+	case "else":
+		next, _, nextEnd, ok := nextActionToken(text, tokenEnd, end)
+		if ok && next == "if" {
+			return nextEnd
+		}
+		return tokenStart
+	default:
+		return tokenStart
+	}
+}
+
+func nextActionToken(text string, start, end int) (string, int, int, bool) {
+	for start < end && (isSpaceByte(text[start]) || text[start] == '-') {
+		start++
+	}
+	tokenStart := start
+	for start < end && isTokenChar(text[start]) {
+		start++
+	}
+	if tokenStart == start {
+		return "", 0, 0, false
+	}
+	return text[tokenStart:start], tokenStart, start, true
 }
 
 func inQuotedString(text string, offset int) bool {

@@ -55,9 +55,13 @@ data class GoDocFunc(
 )
 
 data class TemplateContract(
+    val name: String = "",
     val models: Map<String, String>,
     val dot: String = "",
     val funcs: Map<String, String> = emptyMap(),
+    val source: String = "",
+    val line: Int = 0,
+    val column: Int = 0,
 )
 
 class GoDocIndex(
@@ -250,9 +254,13 @@ class GoDocIndex(
                     name to value.asString
                 } ?: emptyMap()
                 templates[path] = TemplateContract(
+                    name = obj.get("name")?.asString ?: "",
                     models = models,
                     dot = obj.get("dot")?.asString ?: "",
                     funcs = templateFuncs,
+                    source = obj.get("source")?.asString ?: "",
+                    line = obj.get("line")?.asInt ?: 0,
+                    column = obj.get("column")?.asInt ?: 0,
                 )
             }
 
@@ -315,12 +323,15 @@ class GoDocIndex(
 
     fun templateByName(name: String): Pair<String, TemplateContract>? {
         val normalized = name.trimStart('/').replace('\\', '/')
-        return templates.entries.firstOrNull { (path, _) ->
+        val entry = templates.entries.firstOrNull { (path, _) ->
             val templatePath = path.replace('\\', '/')
             templatePath == normalized ||
                 templatePath.substringAfterLast('/') == normalized ||
                 templatePath.endsWith("/$normalized")
-        }?.let { it.key to it.value }
+        } ?: templates.entries.firstOrNull { (_, contract) ->
+            contract.name == normalized
+        }
+        return entry?.let { it.key to it.value }
     }
 
     fun fieldsForType(typeName: String?): Map<String, GoDocField> {

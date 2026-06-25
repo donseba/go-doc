@@ -12,6 +12,7 @@ import (
 
 type app struct {
 	templateFiles []string
+	singleFile    string
 	renderer      renderer.Renderer
 	users         []User
 }
@@ -24,6 +25,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.usersPage)
+	mux.HandleFunc("/single-file", app.singleFilePage)
 
 	addr := "localhost:8100"
 	log.Printf("table example listening on http://%s", addr)
@@ -34,6 +36,7 @@ func newApp() (*app, error) {
 	templateFiles := []string{
 		"templates/main.gohtml",
 		"templates/user_row.gohtml",
+		"templates/single_file.gohtml",
 	}
 	contractRenderer, err := renderer.New(renderer.Config{
 		Mode:  renderer.Production,
@@ -44,6 +47,7 @@ func newApp() (*app, error) {
 	}
 	return &app{
 		templateFiles: templateFiles,
+		singleFile:    "templates/single_file.gohtml",
 		renderer:      contractRenderer,
 		users: []User{
 			{ID: 1, Name: "Ada Lovelace", Email: "ada@example.test", Role: "Admin", Active: true},
@@ -74,13 +78,34 @@ func (app *app) usersPage(w http.ResponseWriter, r *http.Request) {
 	_, _ = body.WriteTo(w)
 }
 
+func (app *app) singleFilePage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body bytes.Buffer
+	if err := app.renderTemplate(&body, "single_file.gohtml", app.singleFile); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = body.WriteTo(w)
+}
+
 func (app *app) render(w io.Writer) error {
+	return app.renderTemplate(w, "main.gohtml", app.templateFiles...)
+}
+
+func (app *app) renderTemplate(w io.Writer, name string, files ...string) error {
 	page := UserTablePage{
 		Title: "Users",
 		Users: app.users,
 	}
 
-	tmpl := template.New("main.gohtml").Funcs(template.FuncMap{
+	tmpl := template.New(name).Funcs(template.FuncMap{
 		"firstUser":   FirstUser,
 		"activeUsers": ActiveUsers,
 		"userByID":    UserByID,
@@ -88,8 +113,8 @@ func (app *app) render(w io.Writer) error {
 	if err := app.renderer.Register(tmpl, page); err != nil {
 		return err
 	}
-	if _, err := tmpl.ParseFiles(app.templateFiles...); err != nil {
+	if _, err := tmpl.ParseFiles(files...); err != nil {
 		return err
 	}
-	return tmpl.ExecuteTemplate(w, "main.gohtml", nil)
+	return tmpl.ExecuteTemplate(w, name, nil)
 }

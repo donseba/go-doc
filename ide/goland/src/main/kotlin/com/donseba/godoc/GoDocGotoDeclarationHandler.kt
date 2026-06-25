@@ -22,7 +22,7 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
         GoDocTemplateContext.templateIncludeAt(file.text, offset, index)?.let { reference ->
-            return targetElement(project, index, reference.templatePath, 1, 1)
+            return targetElement(project, index, reference.targetPath, reference.targetLine, reference.targetColumn)
         }
 
         val contract = index.contractForFile(project, virtualFile.path) ?: return null

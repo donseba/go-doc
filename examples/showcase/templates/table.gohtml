@@ -76,10 +76,15 @@
 
 <section class="panel">
     <h2>Include awareness</h2>
-    <p>Because <code>user_row.gohtml</code> declares <code>@dot User</code>, go-doc can warn when the parent passes the wrong value into that child template.</p>
+    <p>Because <code>user_row.gohtml</code> declares <code>@dot User</code>, go-doc can warn when the parent passes the wrong value into that child template. The same check applies to named <code>block</code> calls.</p>
 <pre><code>&#123;&#123;/* valid: dot is User inside the range */&#125;&#125;
 &#123;&#123; range Page.Users &#125;&#125;
     &#123;&#123; template "user_row.gohtml" . &#125;&#125;
+&#123;&#123; end &#125;&#125;
+
+&#123;&#123;/* also valid: block resolves the named define contract */&#125;&#125;
+&#123;&#123; range Page.Users &#125;&#125;
+    &#123;&#123; block "table_row" . &#125;&#125;&#123;&#123; end &#125;&#125;
 &#123;&#123; end &#125;&#125;
 
 &#123;&#123;/* invalid: Page.Users is []User, not User */&#125;&#125;

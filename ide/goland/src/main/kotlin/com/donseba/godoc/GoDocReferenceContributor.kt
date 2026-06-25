@@ -63,7 +63,7 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                                     element = element,
                                     absoluteStart = ref.startOffset,
                                     absoluteEnd = ref.endOffset,
-                                    target = GoDocTarget(index.rootPath, ref.templatePath, 1, 1),
+                                    target = GoDocTarget(index.rootPath, ref.targetPath, ref.targetLine, ref.targetColumn),
                                 ),
                             )
                         }

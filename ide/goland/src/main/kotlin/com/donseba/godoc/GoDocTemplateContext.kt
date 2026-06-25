@@ -22,6 +22,9 @@ data class GoDocFuncReference(
 data class GoDocTemplateIncludeReference(
     val templateName: String,
     val templatePath: String,
+    val targetPath: String,
+    val targetLine: Int,
+    val targetColumn: Int,
     val startOffset: Int,
     val endOffset: Int,
 )
@@ -176,6 +179,9 @@ object GoDocTemplateContext {
             GoDocTemplateIncludeReference(
                 templateName = name,
                 templatePath = template.first,
+                targetPath = template.second.source.ifBlank { template.first },
+                targetLine = template.second.line.takeIf { it > 0 } ?: 1,
+                targetColumn = template.second.column.takeIf { it > 0 } ?: 1,
                 startOffset = actionStartOffset + nameRange.first,
                 endOffset = actionStartOffset + nameRange.last + 1,
             ),
@@ -438,7 +444,7 @@ object GoDocTemplateContext {
 
     private val actionPattern = Regex("""\{\{\s*(?:-)?\s*(range|with|end)\b([^}]*)\}\}""")
     private val templateActionPattern = Regex("""\{\{\s*(?:-)?\s*[^}]*\}\}""")
-    private val templateIncludePattern = Regex("""^\{\{\s*(?:-)?\s*template\s+"([^"]+)"(?:\s+[^}]*)?\s*-?\}\}$""")
+    private val templateIncludePattern = Regex("""^\{\{\s*(?:-)?\s*(?:template|block)\s+"([^"]+)"(?:\s+[^}]*)?\s*-?\}\}$""")
     private val modelContractPattern = Regex("""(?m)^\s*@model\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
     private val dotContractPattern = Regex("""(?m)^\s*@dot\s+([A-Za-z0-9_./\-]+)""")
     private val funcContractPattern = Regex("""(?m)^\s*@func\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")

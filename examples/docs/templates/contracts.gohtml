@@ -48,4 +48,20 @@
 &lt;tr&gt;&lt;td&gt;&#123;&#123; .Name &#125;&#125;&lt;/td&gt;&lt;/tr&gt;</code></pre>
 
 <p>When a child template declares <code>@dot</code>, go-doc can validate parent calls such as <code>{{`{{ template "user_row.gohtml" . }}`}}</code>. Passing <code>Page.Users</code> directly to a row template warns because the child expects one <code>User</code>, not <code>[]User</code>.</p>
+
+<h2>Named blocks</h2>
+<pre><code>&#123;&#123;/* parent.gohtml */&#125;&#125;
+&#123;&#123; range Page.Users &#125;&#125;
+    &#123;&#123; block "table_row" . &#125;&#125;&#123;&#123; end &#125;&#125;
+&#123;&#123; end &#125;&#125;
+
+&#123;&#123;/* rows.gohtml */&#125;&#125;
+&#123;&#123; define "table_row" &#125;&#125;
+&#123;&#123;/*
+&#64;dot github.com/example/app.User
+*/&#125;&#125;
+    &lt;tr&gt;&lt;td&gt;&#123;&#123; .Name &#125;&#125;&lt;/td&gt;&lt;/tr&gt;
+&#123;&#123; end &#125;&#125;</code></pre>
+
+<p>Contracts can live on named <code>define</code> blocks too. Put the annotation inside the block so it clearly belongs to that section. A leading annotation directly before <code>define</code> still works as a fallback, but go-doc warns and offers to move it inside. A <code>block</code> call is checked like a <code>template</code> call, so the parent value must match the child dot contract.</p>
 {{ end }}

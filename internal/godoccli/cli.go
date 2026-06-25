@@ -30,9 +30,13 @@ type (
 	}
 
 	templateIndex struct {
+		Name   string            `json:"name,omitempty"`
 		Models map[string]string `json:"models"`
 		Dot    string            `json:"dot,omitempty"`
 		Funcs  map[string]string `json:"funcs,omitempty"`
+		Source string            `json:"source,omitempty"`
+		Line   int               `json:"line,omitempty"`
+		Column int               `json:"column,omitempty"`
 	}
 
 	goTypeIndex struct {
@@ -89,9 +93,11 @@ type (
 )
 
 var (
-	modelPattern = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
-	dotPattern   = regexp.MustCompile(`(?m)^\s*@dot\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
-	funcPattern  = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
+	modelPattern                  = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+	dotPattern                    = regexp.MustCompile(`(?m)^\s*@dot\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+	funcPattern                   = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
+	definePattern                 = regexp.MustCompile(`(?s)\{\{\s*(?:-)?\s*define\s+"([^"]+)"\s*(?:-)?\s*\}\}(.*?)\{\{\s*(?:-)?\s*end\s*(?:-)?\s*\}\}`)
+	leadingTemplateCommentPattern = regexp.MustCompile(`(?s)\{\{/\*.*?\*/\}\}\s*$`)
 )
 
 var reservedTemplateNames = map[string]bool{
@@ -564,6 +570,7 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 		dot := parseDot(src)
 		funcs := parseFuncs(src)
 		if len(models) == 0 && dot == "" && len(funcs) == 0 {
+			scanTemplateDefines(root, path, src, idx)
 			return nil
 		}
 
@@ -572,8 +579,66 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 			Dot:    dot,
 			Funcs:  funcs,
 		}
+		scanTemplateDefines(root, path, src, idx)
 		return nil
 	})
+}
+
+func scanTemplateDefines(root, path, src string, idx *indexFile) {
+	for _, match := range definePattern.FindAllStringSubmatchIndex(src, -1) {
+		name := src[match[2]:match[3]]
+		body := defineContractText(src, match[0], match[4], match[5])
+		models := parseModels(body)
+		dot := parseDot(body)
+		funcs := parseFuncs(body)
+		if len(models) == 0 && dot == "" && len(funcs) == 0 {
+			continue
+		}
+		line, column := lineColumn(src, match[0])
+		source := rel(root, path)
+		idx.Templates[source+"#"+name] = templateIndex{
+			Name:   name,
+			Models: models,
+			Dot:    dot,
+			Funcs:  funcs,
+			Source: source,
+			Line:   line,
+			Column: column,
+		}
+	}
+}
+
+func defineContractText(src string, defineStart, bodyStart, bodyEnd int) string {
+	body := src[bodyStart:bodyEnd]
+	if hasContractAnnotations(body) {
+		return body
+	}
+	prefix := src[:defineStart]
+	if match := leadingTemplateCommentPattern.FindString(prefix); match != "" {
+		return match + "\n" + body
+	}
+	return body
+}
+
+func hasContractAnnotations(src string) bool {
+	return modelPattern.MatchString(src) || dotPattern.MatchString(src) || funcPattern.MatchString(src)
+}
+
+func lineColumn(src string, offset int) (int, int) {
+	line := 1
+	column := 1
+	for i, r := range src {
+		if i >= offset {
+			break
+		}
+		if r == '\n' {
+			line++
+			column = 1
+			continue
+		}
+		column++
+	}
+	return line, column
 }
 
 func parseModels(src string) map[string]string {
