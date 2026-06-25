@@ -127,6 +127,51 @@ type User struct {
 	}
 }
 
+func TestBuildIndexUsesGoTypesForImportsAliasesAndGenerics(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "todo.go", `package app
+
+import "time"
+
+type Timestamp = time.Time
+
+type Box[T any] struct {
+	Value T
+}
+
+type Page struct {
+	GeneratedAt Timestamp
+	Names Box[string]
+}
+
+func Lookup() (Page, error) {
+	return Page{}, nil
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@model Page Page
+@func lookup Lookup
+*/}}
+{{ Page.GeneratedAt.Format "15:04:05" }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	page := idx.Types["example.com/app.Page"]
+	if page.Fields["GeneratedAt"].Type != "time.Time" {
+		t.Fatalf("GeneratedAt type = %q, want time.Time", page.Fields["GeneratedAt"].Type)
+	}
+	if page.Fields["Names"].Type != "Box[string]" {
+		t.Fatalf("Names type = %q, want Box[string]", page.Fields["Names"].Type)
+	}
+	fn := idx.Funcs["example.com/app.Lookup"]
+	if fn.Result != "Page" || len(fn.Results) != 2 || fn.Results[1] != "error" {
+		t.Fatalf("Lookup metadata = %#v, want Page,error result metadata", fn)
+	}
+}
+
 func TestBuildTemplateIndexRequiresParamContract(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")

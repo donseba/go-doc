@@ -172,6 +172,123 @@ func TestLSPDiagnosticsWarnsForInvalidDeclaredFunctionArgument(t *testing.T) {
 	}
 }
 
+func TestLSPDiagnosticsWarnsForInvalidDeclaredFunctionArity(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.Div":  {Name: "Div", Signature: "func Div(x, y int) int", Params: []string{"int", "int"}, Result: "int"},
+			"example.com/app.Join": {Name: "Join", Signature: "func Join(first string, rest ...string) string", Params: []string{"string", "...string"}, Result: "string"},
+			"example.com/app.Now":  {Name: "Now", Signature: "func Now() time.Time", Result: "time.Time"},
+		},
+	}}
+	contract := templateIndex{
+		Funcs: map[string]string{
+			"div":  "example.com/app.Div",
+			"join": "example.com/app.Join",
+			"now":  "example.com/app.Now",
+		},
+	}
+
+	diagnostics := diagnosticsForText(`{{ div 10 }}
+{{ div 10 2 3 }}
+{{ join }}
+{{ join "a" }}
+{{ join "a" "b" }}
+{{ now 1 }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Function div expects 2 argument(s), got 1")
+	assertDiagnostic(t, diagnostics, "Function div expects 2 argument(s), got 3")
+	assertDiagnostic(t, diagnostics, "Function join expects at least 1 argument(s), got 0")
+	assertDiagnostic(t, diagnostics, "Function now expects 0 argument(s), got 1")
+	if len(diagnostics) != 4 {
+		t.Fatalf("diagnostics = %#v, want four arity diagnostics", diagnostics)
+	}
+}
+
+func TestLSPDiagnosticsUnderstandNestedFunctionArguments(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.User": {Name: "User"},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.CurrentID":   {Name: "CurrentID", Result: "int"},
+			"example.com/app.CurrentUser": {Name: "CurrentUser", Result: "User"},
+			"example.com/app.UserByID":    {Name: "UserByID", Result: "User", Params: []string{"int"}},
+		},
+		Short: map[string][]string{"User": {"example.com/app.User"}},
+	}}
+	contract := templateIndex{
+		Funcs: map[string]string{
+			"currentID":   "example.com/app.CurrentID",
+			"currentUser": "example.com/app.CurrentUser",
+			"userByID":    "example.com/app.UserByID",
+		},
+	}
+
+	diagnostics := diagnosticsForText(`{{ userByID (currentID) }}
+{{ userByID (currentUser) }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Cannot pass example.com/app.User to userByID argument 1 because it expects int")
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics = %#v, want one nested argument diagnostic", diagnostics)
+	}
+}
+
+func TestLSPDiagnosticsUnderstandPipelineFunctionArguments(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name: "Page",
+				Fields: map[string]fieldIndex{
+					"DoneCount": {Type: "int"},
+					"Title":     {Type: "string"},
+				},
+			},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.Div": {Name: "Div", Result: "int", Params: []string{"int", "int"}},
+		},
+	}}
+	contract := templateIndex{
+		Models: map[string]string{"Page": "example.com/app.Page"},
+		Funcs:  map[string]string{"div": "example.com/app.Div"},
+	}
+
+	diagnostics := diagnosticsForText(`{{ Page.DoneCount | div 2 }}
+{{ Page.DoneCount | div }}
+{{ Page.DoneCount | div "bad" }}
+{{ Page.Title | div 2 }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Function div expects 2 argument(s), got 1")
+	assertDiagnostic(t, diagnostics, "Cannot pass string to div argument 1 because it expects int")
+	assertDiagnostic(t, diagnostics, "Cannot pipe string to div argument 2 because it expects int")
+	if len(diagnostics) != 3 {
+		t.Fatalf("diagnostics = %#v, want three pipeline diagnostics", diagnostics)
+	}
+}
+
+func TestLSPDiagnosticsValidateFunctionReturnShape(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.Lookup": {Name: "Lookup", Results: []string{"string", "error"}, ReturnOK: true},
+			"example.com/app.Bad":    {Name: "Bad", Results: []string{"string", "bool"}, ReturnOK: true},
+			"example.com/app.Noop":   {Name: "Noop", ReturnOK: true},
+		},
+	}}
+	contract := templateIndex{
+		Funcs: map[string]string{
+			"lookup": "example.com/app.Lookup",
+			"bad":    "example.com/app.Bad",
+			"noop":   "example.com/app.Noop",
+		},
+	}
+
+	diagnostics := diagnosticsForText(`{{ lookup }}
+{{ bad }}
+{{ noop }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Function bad has unsupported template return values (string, bool); use one value or (value, error)")
+	assertDiagnostic(t, diagnostics, "Function noop cannot be used in a template action because it returns no value")
+	if len(diagnostics) != 2 {
+		t.Fatalf("diagnostics = %#v, want two return-shape diagnostics", diagnostics)
+	}
+}
+
 func TestLSPUsesDeclaredFunctionReturnTypes(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{
@@ -275,6 +392,101 @@ func TestLSPUsesParenthesizedFunctionReturnWithArguments(t *testing.T) {
 	}
 	if ref.ownerType != "example.com/app.User" || ref.fieldName != "Name" {
 		t.Fatalf("ref = %#v, want User.Name", ref)
+	}
+
+	for _, text := range []string{`{{ (userByID 42). }}`, `{{ (userByID 42).`} {
+		items := completionsForText(t, text, idx, contract, strings.Index(text, ".")+1)
+		if len(items) != 2 {
+			t.Fatalf("items for %q = %#v, want User fields after parenthesized function call", text, items)
+		}
+		if items[0].Label != "Email" || items[1].Label != "Name" {
+			t.Fatalf("items for %q = %#v, want Email and Name field completions", text, items)
+		}
+	}
+
+	longText := strings.Repeat("<p>padding</p>\n", 60) + `{{ (userByID 42). }}`
+	items := completionsForText(t, longText, idx, contract, strings.LastIndex(longText, ".")+1)
+	if len(items) != 2 {
+		t.Fatalf("items for long template = %#v, want User fields after parenthesized function call", items)
+	}
+}
+
+func TestLSPSemanticTokensHighlightDeclaredFunctionTypes(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Funcs: map[string]goFuncIndex{
+			"github.com/donseba/go-doc/examples/table.FirstUser": {Name: "FirstUser"},
+		},
+	}}
+	contract := templateIndex{}
+	text := `{{/*
+@func firstUser github.com/donseba/go-doc/examples/table.FirstUser
+*/}}`
+
+	tokens := semanticTokensForText(text, idx, contract)
+	found := false
+	for _, token := range tokens {
+		if token.tokenType == semanticFunction && text[token.start:token.start+token.length] == "FirstUser" {
+			found = true
+		}
+		if token.tokenType == semanticFunction && strings.Contains(text[token.start:token.start+token.length], "github.com") {
+			t.Fatalf("function declaration token should only cover the tail, got %q", text[token.start:token.start+token.length])
+		}
+	}
+	if !found {
+		t.Fatalf("tokens = %#v, want semantic function token for FirstUser tail", tokens)
+	}
+}
+
+func TestLSPFindsDeclaredFunctionOperands(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.User": {
+				Name: "User",
+				Fields: map[string]fieldIndex{
+					"Name": {Type: "string"},
+				},
+			},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.FirstUser": {Name: "FirstUser", Result: "User"},
+			"example.com/app.UserByID":  {Name: "UserByID", Result: "User", Params: []string{"int"}},
+		},
+		Short: map[string][]string{"User": {"example.com/app.User"}},
+	}}
+	contract := templateIndex{
+		Funcs: map[string]string{
+			"firstUser": "example.com/app.FirstUser",
+			"userByID":  "example.com/app.UserByID",
+		},
+	}
+	text := `{{ with firstUser }}{{ .Name }}{{ end }}
+{{ (userByID 2).Name }}`
+
+	name, _, _, ok := templateFunctionAt(text, strings.Index(text, "firstUser")+1, idx, contract)
+	if !ok || name != "firstUser" {
+		t.Fatalf("templateFunctionAt(firstUser) = %q, %v; want firstUser", name, ok)
+	}
+	name, _, _, ok = templateFunctionAt(text, strings.Index(text, "userByID")+1, idx, contract)
+	if !ok || name != "userByID" {
+		t.Fatalf("templateFunctionAt(userByID) = %q, %v; want userByID", name, ok)
+	}
+
+	tokens := semanticTokensForText(text, idx, contract)
+	foundFirstUser := false
+	foundUserByID := false
+	for _, token := range tokens {
+		if token.tokenType != semanticFunction {
+			continue
+		}
+		switch text[token.start : token.start+token.length] {
+		case "firstUser":
+			foundFirstUser = true
+		case "userByID":
+			foundUserByID = true
+		}
+	}
+	if !foundFirstUser || !foundUserByID {
+		t.Fatalf("tokens = %#v, want semantic function tokens for firstUser and userByID", tokens)
 	}
 }
 
@@ -1343,6 +1555,26 @@ func hasCompletionLabel(items []completionItem, label string) bool {
 		}
 	}
 	return false
+}
+
+func completionsForText(t *testing.T, text string, idx lspIndex, contract templateIndex, offset int) []completionItem {
+	t.Helper()
+	uri := "file:///template.gohtml"
+	server := &lspServer{
+		idx: indexFile{
+			Version:   idx.Version,
+			Module:    idx.Module,
+			Templates: map[string]templateIndex{"template.gohtml": contract},
+			Types:     idx.Types,
+			Funcs:     idx.Funcs,
+			Short:     idx.Short,
+		},
+		docs: map[string]string{uri: text},
+	}
+	return server.completions(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     positionAt(text, offset),
+	})
 }
 
 func writeTestFile(t *testing.T, path, content string) {

@@ -1,5 +1,6 @@
 {{/*
 @model Page github.com/donseba/go-doc/examples/table.UserTablePage
+
 @func firstUser github.com/donseba/go-doc/examples/table.FirstUser
 @func activeUsers github.com/donseba/go-doc/examples/table.ActiveUsers
 @func userByID github.com/donseba/go-doc/examples/table.UserByID
@@ -26,7 +27,7 @@
         {{ with firstUser }}
             <p>First typed function result: {{ .Name }} ({{ .Status }})</p>
         {{ end }}
-        <p>Parenthesized function result: {{ (userByID 2).Email }}</p>
+        <p>Parenthesized function result: {{ (userByID 2).Name }}</p>
     </header>
 
     <table>

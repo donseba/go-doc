@@ -135,22 +135,49 @@ object GoDocTemplateContext {
         for (match in templateActionPattern.findAll(text)) {
             val actionRange = match.range
             if (offset < actionRange.first || offset > actionRange.last + 1) continue
-            val actionText = match.value
-            val open = actionText.indexOf("{{")
-            if (open < 0) return null
-            var start = open + 2
-            while (start < actionText.length && (actionText[start] == '-' || actionText[start].isWhitespace())) start++
-            val end = actionText.indexOfFirstFrom(start) { isTokenChar(it) }
-            if (end <= start) return null
-            val name = actionText.substring(start, end)
-            val fnName = contract.funcs[name] ?: return null
-            if (!index.funcs.containsKey(fnName)) return null
-            val absoluteStart = actionRange.first + start
-            val absoluteEnd = actionRange.first + end
-            if (offset < absoluteStart || offset > absoluteEnd) return null
-            return GoDocFuncReference(fnName, absoluteStart, absoluteEnd)
+            templateFunctionReferencesInAction(match.value, actionRange.first, index, contract)
+                .firstOrNull { offset >= it.startOffset && offset <= it.endOffset }
+                ?.let { return it }
         }
         return null
+    }
+
+    private fun templateFunctionReferencesInAction(
+        actionText: String,
+        actionStartOffset: Int,
+        index: GoDocIndex,
+        contract: TemplateContract,
+    ): List<GoDocFuncReference> {
+        val open = actionText.indexOf("{{")
+        if (open < 0) return emptyList()
+        val close = actionText.lastIndexOf("}}")
+        if (close < open) return emptyList()
+
+        val refs = mutableListOf<GoDocFuncReference>()
+        var cursor = open + 2
+        while (cursor < close) {
+            val char = actionText[cursor]
+            if (inQuotedString(actionText, cursor) || !isTokenChar(char) || char == '.' || char == '$') {
+                cursor++
+                continue
+            }
+
+            val tokenStart = cursor
+            while (cursor < close && isTokenChar(actionText[cursor])) {
+                cursor++
+            }
+            val name = actionText.substring(tokenStart, cursor)
+            val fnName = contract.funcs[name] ?: continue
+            if (!index.funcs.containsKey(fnName)) continue
+            refs.add(
+                GoDocFuncReference(
+                    funcName = fnName,
+                    startOffset = actionStartOffset + tokenStart,
+                    endOffset = actionStartOffset + cursor,
+                ),
+            )
+        }
+        return refs
     }
 
     fun fieldReferencesInRange(
@@ -214,7 +241,7 @@ object GoDocTemplateContext {
                 val range = match.range
                 if (range.first >= endOffset) break
                 if (range.last + 1 <= startOffset) continue
-                templateFunctionAt(text, range.first + 2, index, contract)?.let { ref ->
+                for (ref in templateFunctionReferencesInAction(match.value, range.first, index, contract)) {
                     if (ref.startOffset < endOffset && ref.endOffset > startOffset) {
                         refs.add(ref)
                     }
@@ -313,12 +340,6 @@ object GoDocTemplateContext {
 
     private fun isTokenChar(char: Char): Boolean {
         return char == '$' || char == '_' || char == '.' || char.isLetterOrDigit()
-    }
-
-    private fun String.indexOfFirstFrom(start: Int, predicate: (Char) -> Boolean): Int {
-        var index = start
-        while (index < length && predicate(this[index])) index++
-        return index
     }
 
     private fun inQuotedString(text: String, offset: Int): Boolean {

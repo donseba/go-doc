@@ -6,15 +6,16 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/printer"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"golang.org/x/tools/go/packages"
 )
 
 type (
@@ -70,6 +71,8 @@ type (
 		Column    int      `json:"column,omitempty"`
 		Doc       string   `json:"doc,omitempty"`
 		Result    string   `json:"result,omitempty"`
+		Results   []string `json:"results,omitempty"`
+		ReturnOK  bool     `json:"returnOK,omitempty"`
 		Signature string   `json:"signature,omitempty"`
 		Params    []string `json:"params,omitempty"`
 	}
@@ -249,7 +252,7 @@ func buildIndexWithMode(root string, requireTemplateModels bool) (indexFile, boo
 	if requireTemplateModels && !needed {
 		return idx, false, nil
 	}
-	if err := scanGoTypes(absRoot, module, cfg, &idx); err != nil {
+	if err := scanGoTypes(absRoot, cfg, &idx); err != nil {
 		return indexFile{}, false, err
 	}
 	sortShortNames(idx.Short)
@@ -272,109 +275,265 @@ func readModulePath(root string) (string, error) {
 	return "", errors.New("go.mod has no module line")
 }
 
-func scanGoTypes(root, module string, cfg indexConfig, idx *indexFile) error {
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if shouldSkipDir(root, path, d.Name(), cfg) {
-				return filepath.SkipDir
+func scanGoTypes(root string, cfg indexConfig, idx *indexFile) error {
+	fileSet := token.NewFileSet()
+	loaded, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedSyntax |
+			packages.NeedTypes |
+			packages.NeedTypesInfo |
+			packages.NeedModule,
+		Dir:  root,
+		Fset: fileSet,
+	}, "./...")
+	if err != nil {
+		return err
+	}
+
+	for _, pkg := range loaded {
+		if len(pkg.Errors) > 0 {
+			for _, pkgErr := range pkg.Errors {
+				idx.Problems = append(idx.Problems, problem{File: pkgErr.Pos, Message: pkgErr.Msg})
 			}
-			return nil
 		}
-		if !shouldIncludePath(root, path, cfg) {
-			return nil
+		if pkg.Types == nil || !shouldIndexPackage(root, pkg, cfg) {
+			continue
 		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+		indexPackageTypes(root, fileSet, pkg, idx)
+	}
+	return nil
+}
 
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, path, nil, parser.ParseComments)
-		if err != nil {
-			idx.Problems = append(idx.Problems, problem{File: rel(root, path), Message: err.Error()})
-			return nil
+func shouldIndexPackage(root string, pkg *packages.Package, cfg indexConfig) bool {
+	for _, file := range pkg.GoFiles {
+		if shouldIncludePath(root, file, cfg) {
+			return true
 		}
+	}
+	for _, file := range pkg.CompiledGoFiles {
+		if shouldIncludePath(root, file, cfg) {
+			return true
+		}
+	}
+	return false
+}
 
-		importPath := moduleImportPath(root, module, filepath.Dir(path))
+func indexPackageTypes(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile) {
+	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
-			genDecl, ok := decl.(*ast.GenDecl)
-			if !ok || genDecl.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range genDecl.Specs {
-				typeSpec, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
+			switch decl := decl.(type) {
+			case *ast.GenDecl:
+				if decl.Tok == token.TYPE {
+					indexPackageTypeDecl(root, fileSet, pkg, decl, idx)
 				}
-				if !typeSpec.Name.IsExported() {
-					continue
-				}
-				structType, ok := typeSpec.Type.(*ast.StructType)
-				if !ok {
-					continue
-				}
-
-				fullName := importPath + "." + typeSpec.Name.Name
-				position := fileSet.Position(typeSpec.Name.Pos())
-				idx.Types[fullName] = goTypeIndex{
-					Name:    typeSpec.Name.Name,
-					Package: importPath,
-					File:    rel(root, path),
-					Line:    position.Line,
-					Column:  position.Column,
-					Doc:     docText(firstDoc(typeSpec.Doc, genDecl.Doc)),
-					Fields:  exportedFields(root, path, fileSet, structType),
-					Methods: make(map[string]methodIndex),
-				}
-				idx.Short[typeSpec.Name.Name] = append(idx.Short[typeSpec.Name.Name], fullName)
+			case *ast.FuncDecl:
+				indexPackageFuncDecl(root, fileSet, pkg, decl, idx)
 			}
 		}
+	}
+}
 
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || !fn.Name.IsExported() {
-				continue
-			}
-			position := fileSet.Position(fn.Name.Pos())
-			if fn.Recv != nil {
-				typeName := receiverTypeName(fileSet, fn.Recv)
-				if typeName == "" {
-					continue
-				}
-				fullTypeName := importPath + "." + typeName
-				typ := idx.Types[fullTypeName]
-				if typ.Methods == nil {
-					typ.Methods = make(map[string]methodIndex)
-				}
-				typ.Methods[fn.Name.Name] = methodIndex{
-					Type:      resultType(fileSet, fn.Type),
-					Signature: funcSignature(fileSet, fn.Type),
-					Doc:       docText(fn.Doc),
-					File:      rel(root, path),
-					Line:      position.Line,
-					Column:    position.Column,
-				}
-				idx.Types[fullTypeName] = typ
-				continue
-			}
-			fullName := importPath + "." + fn.Name.Name
-			idx.Funcs[fullName] = goFuncIndex{
-				Name:      fn.Name.Name,
-				Package:   importPath,
-				File:      rel(root, path),
-				Line:      position.Line,
-				Column:    position.Column,
-				Doc:       docText(fn.Doc),
-				Result:    resultType(fileSet, fn.Type),
-				Signature: funcSignature(fileSet, fn.Type),
-				Params:    paramTypes(fileSet, fn.Type),
-			}
+func indexPackageTypeDecl(root string, fileSet *token.FileSet, pkg *packages.Package, decl *ast.GenDecl, idx *indexFile) {
+	for _, spec := range decl.Specs {
+		typeSpec, ok := spec.(*ast.TypeSpec)
+		if !ok || !typeSpec.Name.IsExported() {
+			continue
 		}
+		obj, ok := pkg.TypesInfo.Defs[typeSpec.Name].(*types.TypeName)
+		if !ok || obj.Pkg() == nil {
+			continue
+		}
+		named, structType := namedStruct(obj.Type())
+		if named == nil || structType == nil {
+			continue
+		}
+		position := fileSet.Position(typeSpec.Name.Pos())
+		fullName := qualifiedObjectName(obj)
+		idx.Types[fullName] = goTypeIndex{
+			Name:    obj.Name(),
+			Package: obj.Pkg().Path(),
+			File:    rel(root, position.Filename),
+			Line:    position.Line,
+			Column:  position.Column,
+			Doc:     docText(firstDoc(typeSpec.Doc, decl.Doc)),
+			Fields:  exportedTypedFields(root, fileSet, pkg, structType, typeSpec),
+			Methods: make(map[string]methodIndex),
+		}
+		idx.Short[obj.Name()] = append(idx.Short[obj.Name()], fullName)
+	}
+}
 
+func indexPackageFuncDecl(root string, fileSet *token.FileSet, pkg *packages.Package, fn *ast.FuncDecl, idx *indexFile) {
+	if !fn.Name.IsExported() {
+		return
+	}
+	obj, ok := pkg.TypesInfo.Defs[fn.Name].(*types.Func)
+	if !ok || obj.Pkg() == nil {
+		return
+	}
+	sig, ok := obj.Type().(*types.Signature)
+	if !ok {
+		return
+	}
+	position := fileSet.Position(fn.Name.Pos())
+	if sig.Recv() != nil {
+		receiver := receiverNamed(sig.Recv().Type())
+		if receiver == nil || receiver.Obj().Pkg() == nil {
+			return
+		}
+		fullTypeName := qualifiedObjectName(receiver.Obj())
+		typ, ok := idx.Types[fullTypeName]
+		if !ok {
+			return
+		}
+		if typ.Methods == nil {
+			typ.Methods = make(map[string]methodIndex)
+		}
+		results := signatureResults(sig, pkg.Types)
+		typ.Methods[obj.Name()] = methodIndex{
+			Type:      templateValueResultType(results),
+			Signature: types.TypeString(sig, typeQualifier(pkg.Types)),
+			Doc:       docText(fn.Doc),
+			File:      rel(root, position.Filename),
+			Line:      position.Line,
+			Column:    position.Column,
+		}
+		idx.Types[fullTypeName] = typ
+		return
+	}
+	results := signatureResults(sig, pkg.Types)
+	idx.Funcs[qualifiedObjectName(obj)] = goFuncIndex{
+		Name:      obj.Name(),
+		Package:   obj.Pkg().Path(),
+		File:      rel(root, position.Filename),
+		Line:      position.Line,
+		Column:    position.Column,
+		Doc:       docText(fn.Doc),
+		Result:    templateValueResultType(results),
+		Results:   results,
+		ReturnOK:  true,
+		Signature: types.TypeString(sig, typeQualifier(pkg.Types)),
+		Params:    signatureParams(sig, pkg.Types),
+	}
+}
+
+func namedStruct(typ types.Type) (*types.Named, *types.Struct) {
+	typ = types.Unalias(typ)
+	named, ok := typ.(*types.Named)
+	if !ok {
+		return nil, nil
+	}
+	structType, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return nil, nil
+	}
+	return named, structType
+}
+
+func receiverNamed(typ types.Type) *types.Named {
+	for {
+		switch t := types.Unalias(typ).(type) {
+		case *types.Pointer:
+			typ = t.Elem()
+		case *types.Named:
+			return t
+		default:
+			return nil
+		}
+	}
+}
+
+func exportedTypedFields(root string, fileSet *token.FileSet, pkg *packages.Package, structType *types.Struct, typeSpec *ast.TypeSpec) map[string]fieldIndex {
+	metadata := astFieldMetadata(root, fileSet, typeSpec)
+	fields := make(map[string]fieldIndex)
+	for i := range structType.NumFields() {
+		field := structType.Field(i)
+		if !field.Exported() {
+			continue
+		}
+		meta := metadata[field.Name()]
+		if meta.File == "" {
+			position := fileSet.Position(field.Pos())
+			meta.File = rel(root, position.Filename)
+			meta.Line = position.Line
+			meta.Column = position.Column
+		}
+		meta.Type = typeString(field.Type(), pkg.Types)
+		fields[field.Name()] = meta
+	}
+	return fields
+}
+
+func astFieldMetadata(root string, fileSet *token.FileSet, typeSpec *ast.TypeSpec) map[string]fieldIndex {
+	structType, ok := typeSpec.Type.(*ast.StructType)
+	if !ok {
 		return nil
-	})
+	}
+	fields := make(map[string]fieldIndex)
+	for _, field := range structType.Fields.List {
+		fieldDoc := docText(field.Doc)
+		if fieldDoc == "" {
+			fieldDoc = docText(field.Comment)
+		}
+		for _, name := range field.Names {
+			if !name.IsExported() {
+				continue
+			}
+			position := fileSet.Position(name.Pos())
+			fields[name.Name] = fieldIndex{
+				Doc:    fieldDoc,
+				File:   rel(root, position.Filename),
+				Line:   position.Line,
+				Column: position.Column,
+			}
+		}
+	}
+	return fields
+}
+
+func signatureParams(sig *types.Signature, current *types.Package) []string {
+	params := make([]string, 0, sig.Params().Len())
+	for i := range sig.Params().Len() {
+		paramType := sig.Params().At(i).Type()
+		if sig.Variadic() && i == sig.Params().Len()-1 {
+			if slice, ok := paramType.(*types.Slice); ok {
+				params = append(params, "..."+typeString(slice.Elem(), current))
+				continue
+			}
+		}
+		params = append(params, typeString(paramType, current))
+	}
+	return params
+}
+
+func signatureResults(sig *types.Signature, current *types.Package) []string {
+	results := make([]string, 0, sig.Results().Len())
+	for i := range sig.Results().Len() {
+		results = append(results, typeString(sig.Results().At(i).Type(), current))
+	}
+	return results
+}
+
+func typeString(typ types.Type, current *types.Package) string {
+	return types.TypeString(types.Unalias(typ), typeQualifier(current))
+}
+
+func typeQualifier(current *types.Package) types.Qualifier {
+	return func(pkg *types.Package) string {
+		if pkg == nil || current != nil && pkg.Path() == current.Path() {
+			return ""
+		}
+		return pkg.Path()
+	}
+}
+
+func qualifiedObjectName(obj types.Object) string {
+	if obj == nil || obj.Pkg() == nil {
+		return ""
+	}
+	return obj.Pkg().Path() + "." + obj.Name()
 }
 
 func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
@@ -506,82 +665,15 @@ func hasTemplateModels(idx indexFile) bool {
 	return false
 }
 
-func exportedFields(root, path string, fileSet *token.FileSet, structType *ast.StructType) map[string]fieldIndex {
-	fields := make(map[string]fieldIndex)
-	for _, field := range structType.Fields.List {
-		typeName := exprString(fileSet, field.Type)
-		fieldDoc := docText(field.Doc)
-		if fieldDoc == "" {
-			fieldDoc = docText(field.Comment)
-		}
-		for _, name := range field.Names {
-			if name.IsExported() {
-				position := fileSet.Position(name.Pos())
-				fields[name.Name] = fieldIndex{
-					Type:   typeName,
-					Doc:    fieldDoc,
-					File:   rel(root, path),
-					Line:   position.Line,
-					Column: position.Column,
-				}
-			}
-		}
-	}
-	return fields
-}
-
-func receiverTypeName(fileSet *token.FileSet, recv *ast.FieldList) string {
-	if recv == nil || len(recv.List) == 0 {
+func templateValueResultType(results []string) string {
+	switch {
+	case len(results) == 1:
+		return results[0]
+	case len(results) == 2 && results[1] == "error":
+		return results[0]
+	default:
 		return ""
 	}
-	expr := recv.List[0].Type
-	for {
-		pointer, ok := expr.(*ast.StarExpr)
-		if !ok {
-			break
-		}
-		expr = pointer.X
-	}
-	switch typ := expr.(type) {
-	case *ast.Ident:
-		if typ.IsExported() {
-			return typ.Name
-		}
-	case *ast.IndexExpr:
-		return receiverTypeName(fileSet, &ast.FieldList{List: []*ast.Field{{Type: typ.X}}})
-	case *ast.IndexListExpr:
-		return receiverTypeName(fileSet, &ast.FieldList{List: []*ast.Field{{Type: typ.X}}})
-	}
-	return ""
-}
-
-func resultType(fileSet *token.FileSet, fn *ast.FuncType) string {
-	if fn.Results == nil || len(fn.Results.List) == 0 {
-		return ""
-	}
-	return exprString(fileSet, fn.Results.List[0].Type)
-}
-
-func funcSignature(fileSet *token.FileSet, fn *ast.FuncType) string {
-	return exprString(fileSet, fn)
-}
-
-func paramTypes(fileSet *token.FileSet, fn *ast.FuncType) []string {
-	if fn.Params == nil || len(fn.Params.List) == 0 {
-		return nil
-	}
-	params := make([]string, 0, len(fn.Params.List))
-	for _, field := range fn.Params.List {
-		typeName := exprString(fileSet, field.Type)
-		if len(field.Names) == 0 {
-			params = append(params, typeName)
-			continue
-		}
-		for range field.Names {
-			params = append(params, typeName)
-		}
-	}
-	return params
 }
 
 func docText(group *ast.CommentGroup) string {
@@ -600,18 +692,6 @@ func firstDoc(groups ...*ast.CommentGroup) *ast.CommentGroup {
 	return nil
 }
 
-func exprString(fileSet *token.FileSet, expr ast.Expr) string {
-	var builder strings.Builder
-	if err := formatNode(&builder, fileSet, expr); err != nil {
-		return ""
-	}
-	return builder.String()
-}
-
-func formatNode(builder *strings.Builder, fileSet *token.FileSet, node any) error {
-	return printer.Fprint(builder, fileSet, node)
-}
-
 func filterTypes(idx indexFile, query string) {
 	query = strings.ToLower(query)
 	for name := range idx.Types {
@@ -626,14 +706,6 @@ func sortShortNames(short map[string][]string) {
 	for name := range short {
 		sort.Strings(short[name])
 	}
-}
-
-func moduleImportPath(root, module, dir string) string {
-	relative := rel(root, dir)
-	if relative == "." {
-		return module
-	}
-	return module + "/" + filepath.ToSlash(relative)
 }
 
 func rel(root, path string) string {

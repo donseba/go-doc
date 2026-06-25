@@ -1040,7 +1040,13 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 		if item, ok := lenDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
 			items = append(items, item)
 		}
+		if item, ok := functionReturnDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+			items = append(items, item)
+		}
 		if item, ok := functionArgumentDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+			items = append(items, item)
+		}
+		if item, ok := pipelineFunctionDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
 			items = append(items, item)
 		}
 		for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
@@ -1159,15 +1165,15 @@ func functionArgumentDiagnosticForAction(text string, actionStart int, actionTex
 		return diagnostic{}, false
 	}
 	fn := idx.Funcs[fnName]
-	if len(fn.Params) == 0 {
-		return diagnostic{}, false
-	}
 	args := templateArgs(actionText, end)
+	if item, ok := functionArityDiagnostic(text, actionStart, name, end, fn, args); ok {
+		return item, true
+	}
 	for index, arg := range args {
-		if index >= len(fn.Params) {
-			break
+		expected := expectedArgumentType(fn.Params, index)
+		if expected == "" {
+			continue
 		}
-		expected := strings.TrimPrefix(fn.Params[index], "...")
 		actual := literalType(arg.Text)
 		if actual == "" {
 			actual = resolveExpressionValueType(idx, contract, arg.Text, "")
@@ -1185,6 +1191,171 @@ func functionArgumentDiagnosticForAction(text string, actionStart int, actionTex
 	return diagnostic{}, false
 }
 
+func pipelineFunctionDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
+	segments := templatePipelineSegments(actionText)
+	if len(segments) < 2 {
+		return diagnostic{}, false
+	}
+	prevType := ""
+	for index, segment := range segments {
+		expression := strings.TrimSpace(actionText[segment.Start:segment.End])
+		if expression == "" {
+			continue
+		}
+		name, nameStart, nameEnd, ok := firstCommandInSegment(actionText, segment)
+		if !ok {
+			prevType = resolveExpressionValueType(idx, contract, expression, "")
+			continue
+		}
+		fnName := contract.Funcs[name]
+		if fnName == "" {
+			prevType = resolveExpressionValueType(idx, contract, expression, "")
+			continue
+		}
+		fn := idx.Funcs[fnName]
+		args := templateArgsInRange(actionText, nameEnd, segment.End)
+		if index == 0 {
+			prevType = templateFunctionResultType(fn)
+			continue
+		}
+		piped := prevType != ""
+		totalArgs := len(args)
+		if piped {
+			totalArgs++
+		}
+		if item, ok := functionArityDiagnosticForCount(text, actionStart+nameStart, actionStart+nameEnd, name, fn, totalArgs); ok {
+			return item, true
+		}
+		for argIndex, arg := range args {
+			expected := expectedArgumentType(fn.Params, argIndex)
+			if expected == "" {
+				continue
+			}
+			actual := literalType(arg.Text)
+			if actual == "" {
+				actual = resolveExpressionValueType(idx, contract, arg.Text, "")
+			}
+			if actual == "" || argumentAssignable(expected, actual) {
+				continue
+			}
+			return diagnostic{
+				Range:    rangeFromOffsets(text, actionStart+arg.Start, actionStart+arg.End),
+				Severity: 2,
+				Source:   "go-doc",
+				Message:  fmt.Sprintf("Cannot pass %s to %s argument %d because it expects %s", actual, name, argIndex+1, expected),
+			}, true
+		}
+		if piped {
+			pipedIndex := totalArgs - 1
+			expected := expectedArgumentType(fn.Params, pipedIndex)
+			if expected != "" && !argumentAssignable(expected, prevType) {
+				return diagnostic{
+					Range:    rangeFromOffsets(text, actionStart+segments[index-1].Start, actionStart+segments[index-1].End),
+					Severity: 2,
+					Source:   "go-doc",
+					Message:  fmt.Sprintf("Cannot pipe %s to %s argument %d because it expects %s", prevType, name, pipedIndex+1, expected),
+				}, true
+			}
+		}
+		prevType = templateFunctionResultType(fn)
+	}
+	return diagnostic{}, false
+}
+
+func functionReturnDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
+	name, start, end, ok := templateFunctionInAction(actionText, idx, contract)
+	if !ok {
+		return diagnostic{}, false
+	}
+	fnName := contract.Funcs[name]
+	if fnName == "" {
+		return diagnostic{}, false
+	}
+	fn := idx.Funcs[fnName]
+	if templateFunctionResultType(fn) != "" {
+		return diagnostic{}, false
+	}
+	if !fn.ReturnOK {
+		return diagnostic{}, false
+	}
+	results := functionResults(fn)
+	if len(results) == 0 {
+		return diagnostic{
+			Range:    rangeFromOffsets(text, actionStart+start, actionStart+end),
+			Severity: 2,
+			Source:   "go-doc",
+			Message:  fmt.Sprintf("Function %s cannot be used in a template action because it returns no value", name),
+		}, true
+	}
+	return diagnostic{
+		Range:    rangeFromOffsets(text, actionStart+start, actionStart+end),
+		Severity: 2,
+		Source:   "go-doc",
+		Message:  fmt.Sprintf("Function %s has unsupported template return values (%s); use one value or (value, error)", name, strings.Join(results, ", ")),
+	}, true
+}
+
+func functionArityDiagnostic(text string, actionStart int, name string, functionEnd int, fn goFuncIndex, args []templateArg) (diagnostic, bool) {
+	if item, ok := functionArityDiagnosticForCount(text, actionStart+functionEnd, actionStart+functionEnd, name, fn, len(args)); ok {
+		if len(args) > 0 {
+			minArgs, _ := functionArgBounds(fn)
+			if len(args) < minArgs {
+				last := args[len(args)-1]
+				item.Range = rangeFromOffsets(text, actionStart+last.Start, actionStart+last.End)
+			} else {
+				extra := args[max(0, minArgs)]
+				item.Range = rangeFromOffsets(text, actionStart+extra.Start, actionStart+extra.End)
+			}
+		}
+		return item, true
+	}
+	return diagnostic{}, false
+}
+
+func functionArityDiagnosticForCount(text string, start, end int, name string, fn goFuncIndex, argCount int) (diagnostic, bool) {
+	minArgs, maxArgs := functionArgBounds(fn)
+	if argCount >= minArgs && (maxArgs < 0 || argCount <= maxArgs) {
+		return diagnostic{}, false
+	}
+	if start == end {
+		end = start + len(name)
+	}
+	want := fmt.Sprintf("%d", minArgs)
+	if maxArgs < 0 {
+		want = fmt.Sprintf("at least %d", minArgs)
+	}
+	return diagnostic{
+		Range:    rangeFromOffsets(text, start, end),
+		Severity: 2,
+		Source:   "go-doc",
+		Message:  fmt.Sprintf("Function %s expects %s argument(s), got %d", name, want, argCount),
+	}, true
+}
+
+func functionArgBounds(fn goFuncIndex) (int, int) {
+	minArgs := len(fn.Params)
+	maxArgs := len(fn.Params)
+	variadic := len(fn.Params) > 0 && strings.HasPrefix(fn.Params[len(fn.Params)-1], "...")
+	if variadic {
+		minArgs--
+		maxArgs = -1
+	}
+	return minArgs, maxArgs
+}
+
+func expectedArgumentType(params []string, index int) string {
+	if index < 0 || len(params) == 0 {
+		return ""
+	}
+	if index >= len(params) {
+		if strings.HasPrefix(params[len(params)-1], "...") {
+			return strings.TrimPrefix(params[len(params)-1], "...")
+		}
+		return ""
+	}
+	return strings.TrimPrefix(params[index], "...")
+}
+
 type templateArg struct {
 	Text  string
 	Start int
@@ -1196,10 +1367,18 @@ func templateArgs(actionText string, start int) []templateArg {
 	if close < 0 || start >= close {
 		return nil
 	}
+	return templateArgsInRange(actionText, start, close)
+}
+
+func templateArgsInRange(actionText string, start, close int) []templateArg {
+	if start >= close {
+		return nil
+	}
 	var args []templateArg
 	argStart := -1
 	inQuote := false
 	escaped := false
+	parenDepth := 0
 	for index := start; index < close; index++ {
 		ch := actionText[index]
 		switch {
@@ -1212,7 +1391,14 @@ func templateArgs(actionText string, start int) []templateArg {
 			if argStart < 0 {
 				argStart = index
 			}
-		case !inQuote && isSpaceByte(ch):
+		case !inQuote && ch == '(':
+			parenDepth++
+			if argStart < 0 {
+				argStart = index
+			}
+		case !inQuote && ch == ')' && parenDepth > 0:
+			parenDepth--
+		case !inQuote && parenDepth == 0 && isSpaceByte(ch):
 			if argStart >= 0 {
 				appendTemplateArg(&args, actionText, argStart, index)
 				argStart = -1
@@ -1227,6 +1413,80 @@ func templateArgs(actionText string, start int) []templateArg {
 		appendTemplateArg(&args, actionText, argStart, close)
 	}
 	return args
+}
+
+type templateSegment struct {
+	Start int
+	End   int
+}
+
+func templatePipelineSegments(actionText string) []templateSegment {
+	open := strings.Index(actionText, "{{")
+	close := strings.LastIndex(actionText, "}}")
+	if open < 0 || close < open {
+		return nil
+	}
+	start := open + len("{{")
+	for start < close && (isSpaceByte(actionText[start]) || actionText[start] == '-') {
+		start++
+	}
+	var segments []templateSegment
+	segmentStart := start
+	inQuote := false
+	escaped := false
+	parenDepth := 0
+	for index := start; index < close; index++ {
+		ch := actionText[index]
+		switch {
+		case escaped:
+			escaped = false
+		case ch == '\\':
+			escaped = true
+		case ch == '"':
+			inQuote = !inQuote
+		case inQuote:
+		case ch == '(':
+			parenDepth++
+		case ch == ')' && parenDepth > 0:
+			parenDepth--
+		case ch == '|' && parenDepth == 0:
+			appendTemplateSegment(&segments, actionText, segmentStart, index)
+			segmentStart = index + 1
+		}
+	}
+	appendTemplateSegment(&segments, actionText, segmentStart, close)
+	return segments
+}
+
+func appendTemplateSegment(segments *[]templateSegment, actionText string, start, end int) {
+	for start < end && isSpaceByte(actionText[start]) {
+		start++
+	}
+	for end > start && (isSpaceByte(actionText[end-1]) || actionText[end-1] == '-') {
+		end--
+	}
+	if start < end {
+		*segments = append(*segments, templateSegment{Start: start, End: end})
+	}
+}
+
+func firstCommandInSegment(actionText string, segment templateSegment) (string, int, int, bool) {
+	start := segment.Start
+	for start < segment.End && isSpaceByte(actionText[start]) {
+		start++
+	}
+	end := start
+	for end < segment.End && !isSpaceByte(actionText[end]) {
+		end++
+	}
+	if start == end {
+		return "", 0, 0, false
+	}
+	name := strings.TrimSpace(actionText[start:end])
+	if name == "" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "$") || strings.HasPrefix(name, `"`) || strings.HasPrefix(name, "(") || isIntegerLiteral(name) {
+		return "", 0, 0, false
+	}
+	return name, start, end, true
 }
 
 func appendTemplateArg(args *[]templateArg, actionText string, start, end int) {
@@ -2014,13 +2274,23 @@ func semanticTokensForText(text string, idx lspIndex, contract templateIndex) []
 		shortStart := start + len(raw) - len(shortTypeName(raw))
 		tokens = append(tokens, semanticToken{start: shortStart, length: end - shortStart, tokenType: semanticType})
 	}
+	for _, match := range lspFuncTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
+		start, end := match[2], match[3]
+		raw := text[start:end]
+		funcName := normalizeType(raw)
+		if _, ok := idx.Funcs[funcName]; !ok {
+			continue
+		}
+		shortStart := start + len(raw) - len(shortTypeName(raw))
+		tokens = append(tokens, semanticToken{start: shortStart, length: end - shortStart, tokenType: semanticFunction})
+	}
 	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
 		actionText := text[action[0]:action[1]]
 		if isTemplateCommentAction(actionText) {
 			continue
 		}
-		if _, start, end, ok := templateFunctionInAction(actionText, idx, contract); ok {
-			tokens = append(tokens, semanticToken{start: action[0] + start, length: end - start, tokenType: semanticFunction})
+		for _, token := range templateFunctionTokensInAction(actionText, idx, contract) {
+			tokens = append(tokens, semanticToken{start: action[0] + token.start, length: token.end - token.start, tokenType: semanticFunction})
 		}
 		for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
 			if inQuotedString(actionText, match[0]) {
@@ -2091,17 +2361,53 @@ func templateFunctionAt(text string, offset int, idx lspIndex, contract template
 		if offset < action[0] || offset > action[1] {
 			continue
 		}
-		name, start, end, ok := templateFunctionInAction(text[action[0]:action[1]], idx, contract)
-		if !ok {
-			return "", 0, 0, false
-		}
-		start += action[0]
-		end += action[0]
-		if offset >= start && offset <= end {
-			return name, start, end, true
+		for _, token := range templateFunctionTokensInAction(text[action[0]:action[1]], idx, contract) {
+			start := action[0] + token.start
+			end := action[0] + token.end
+			if offset >= start && offset <= end {
+				return token.name, start, end, true
+			}
 		}
 	}
 	return "", 0, 0, false
+}
+
+type templateFunctionToken struct {
+	name       string
+	start, end int
+}
+
+func templateFunctionTokensInAction(actionText string, idx lspIndex, contract templateIndex) []templateFunctionToken {
+	start := strings.Index(actionText, "{{")
+	if start < 0 {
+		return nil
+	}
+	end := strings.LastIndex(actionText, "}}")
+	if end < start {
+		return nil
+	}
+	var tokens []templateFunctionToken
+	for cursor := start + len("{{"); cursor < end; {
+		if inQuotedString(actionText, cursor) || !isTokenChar(actionText[cursor]) || actionText[cursor] == '.' || actionText[cursor] == '$' {
+			cursor++
+			continue
+		}
+		tokenStart := cursor
+		for cursor < end && isTokenChar(actionText[cursor]) {
+			cursor++
+		}
+		name := actionText[tokenStart:cursor]
+		if _, ok := builtInTemplateFuncs[name]; ok {
+			tokens = append(tokens, templateFunctionToken{name: name, start: tokenStart, end: cursor})
+			continue
+		}
+		if fn := contract.Funcs[name]; fn != "" {
+			if _, ok := idx.Funcs[fn]; ok {
+				tokens = append(tokens, templateFunctionToken{name: name, start: tokenStart, end: cursor})
+			}
+		}
+	}
+	return tokens
 }
 
 func templateFunctionInAction(actionText string, idx lspIndex, contract templateIndex) (string, int, int, bool) {
@@ -2213,6 +2519,9 @@ func resolveExpressionValueType(idx lspIndex, contract templateIndex, expression
 	if clean == "." {
 		return dotType
 	}
+	if inner, ok := unwrapParenthesizedExpression(clean); ok {
+		return resolveExpressionValueType(idx, contract, inner, dotType)
+	}
 	if rootType, path, ok := parenthesizedExpressionPath(clean); ok {
 		rootType = resolveExpressionValueType(idx, contract, rootType, dotType)
 		if rootType == "" {
@@ -2258,6 +2567,18 @@ func resolveExpressionValueType(idx lspIndex, contract templateIndex, expression
 
 func resolveExpressionType(idx lspIndex, contract templateIndex, expression, dotType string) string {
 	return resolveGoType(idx, resolveExpressionValueType(idx, contract, expression, dotType))
+}
+
+func unwrapParenthesizedExpression(expression string) (string, bool) {
+	clean := strings.TrimSpace(expression)
+	if !strings.HasPrefix(clean, "(") {
+		return "", false
+	}
+	close := matchingCloseParen(clean, 0)
+	if close < 0 || strings.TrimSpace(clean[close+1:]) != "" {
+		return "", false
+	}
+	return strings.TrimSpace(clean[1:close]), true
 }
 
 func parenthesizedExpressionPath(expression string) (string, []string, bool) {
@@ -2321,7 +2642,7 @@ func functionResultValueType(idx lspIndex, contract templateIndex, name string) 
 	if fnName == "" {
 		return ""
 	}
-	result := idx.Funcs[fnName].Result
+	result := templateFunctionResultType(idx.Funcs[fnName])
 	if result == "" {
 		return ""
 	}
@@ -2332,6 +2653,28 @@ func functionResultValueType(idx lspIndex, contract templateIndex, name string) 
 		return resolved
 	}
 	return result
+}
+
+func templateFunctionResultType(fn goFuncIndex) string {
+	results := functionResults(fn)
+	switch {
+	case len(results) == 1:
+		return results[0]
+	case len(results) == 2 && results[1] == "error":
+		return results[0]
+	default:
+		return ""
+	}
+}
+
+func functionResults(fn goFuncIndex) []string {
+	if len(fn.Results) > 0 {
+		return fn.Results
+	}
+	if fn.Result != "" && !fn.ReturnOK {
+		return []string{fn.Result}
+	}
+	return nil
 }
 
 func isCompositeValueType(typeExpr string) bool {
@@ -2565,14 +2908,16 @@ func mergeVars(left, right map[string]string) map[string]string {
 
 func fieldTargetBeforeCaret(text string, offset int, idx lspIndex, contract templateIndex) (string, bool) {
 	before := strings.TrimRight(text[:max(0, min(offset, len(text)))], " \t\r\n")
+	clipStart := 0
 	if len(before) > 500 {
+		clipStart = len(before) - 500
 		before = before[len(before)-500:]
 	}
 	token := trailingToken(before)
 	if token == "" || !strings.Contains(token, ".") {
 		return "", false
 	}
-	tokenStart := len(before) - len(token)
+	tokenStart := clipStart + len(before) - len(token)
 	if strings.HasPrefix(token, ".") {
 		if rootType, ok := parenthesizedRootBefore(text[:max(0, min(offset, len(text)))], tokenStart, idx, contract); ok {
 			parts := strings.FieldsFunc(token[:strings.LastIndex(token, ".")+1], func(r rune) bool { return r == '.' })

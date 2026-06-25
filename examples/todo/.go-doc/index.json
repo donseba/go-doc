@@ -245,7 +245,12 @@
       "line": 13,
       "column": 6,
       "doc": "Add returns the sum of two integers.",
-      "signature": "func(x, y int) int",
+      "result": "int",
+      "results": [
+        "int"
+      ],
+      "returnOK": true,
+      "signature": "func(x int, y int) int",
       "params": [
         "int",
         "int"
@@ -258,7 +263,12 @@
       "line": 23,
       "column": 6,
       "doc": "Div divides x with y",
-      "signature": "func(x, y int) int",
+      "result": "int",
+      "results": [
+        "int"
+      ],
+      "returnOK": true,
+      "signature": "func(x int, y int) int",
       "params": [
         "int",
         "int"
@@ -271,7 +281,12 @@
       "line": 28,
       "column": 6,
       "doc": "Mul multiplies x with y",
-      "signature": "func(x, y int) int",
+      "result": "int",
+      "results": [
+        "int"
+      ],
+      "returnOK": true,
+      "signature": "func(x int, y int) int",
       "params": [
         "int",
         "int"
@@ -284,7 +299,12 @@
       "line": 18,
       "column": 6,
       "doc": "Sub subtract returns the difference of two integers.",
-      "signature": "func(x, y int) int",
+      "result": "int",
+      "results": [
+        "int"
+      ],
+      "returnOK": true,
+      "signature": "func(x int, y int) int",
       "params": [
         "int",
         "int"
