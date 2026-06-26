@@ -35,6 +35,7 @@ class GoDocStartupActivity : ProjectActivity {
                 }
                 ApplicationManager.getApplication().invokeLater {
                     GoDocIndex.refreshVirtualIndex(project)
+                    GoDocEditorRefresh.refresh(project)
                     if (outFile.isFile) {
                         notify(project, "go-doc index built", indexMessage(root, outFile), NotificationType.INFORMATION)
                     }

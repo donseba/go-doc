@@ -23,7 +23,7 @@ jobs:
           name: Install Java and Gradle
           command: |
             sudo apt-get update
-            sudo apt-get install -y jq openjdk-17-jdk unzip
+            sudo apt-get install -y jq openjdk-17-jdk unzip zip
             curl -fsSL https://services.gradle.org/distributions/gradle-9.6.0-bin.zip -o /tmp/gradle.zip
             unzip -q /tmp/gradle.zip -d /tmp
             echo 'export PATH=/tmp/gradle-9.6.0/bin:$PATH' >> "$BASH_ENV"

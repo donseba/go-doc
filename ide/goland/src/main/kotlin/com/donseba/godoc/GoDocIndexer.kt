@@ -125,6 +125,7 @@ object GoDocIndexer {
                 if (result.exitCode == 0) {
                     ApplicationManager.getApplication().invokeLater {
                         LocalFileSystem.getInstance().refreshAndFindFileByIoFile(outFile)
+                        GoDocEditorRefresh.refresh(project)
                     }
                 }
             } finally {
