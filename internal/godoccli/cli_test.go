@@ -610,6 +610,38 @@ type Todo struct {
 	}
 }
 
+func TestBuildIndexHandlesRecursiveLocalTypes(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "node.go", `package app
+
+type Page struct {
+	Root Node
+}
+
+type Node struct {
+	Label    string
+	Parent   *Node
+	Children []Node
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@model Page Page
+*/}}
+{{ Page.Root.Label }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	if _, ok := idx.Types["example.com/app.Page"]; !ok {
+		t.Fatal("Page type should be indexed")
+	}
+	if _, ok := idx.Types["example.com/app.Node"]; !ok {
+		t.Fatal("Node type should be indexed")
+	}
+}
+
 func TestIndexCommandRemovesStaleOutputWhenNoParamContractExists(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
