@@ -55,4 +55,9 @@ Set-FirstJsonVersion (Join-Path $Root "ide\vscode\package.json") $Version
 Set-FirstTwoJsonVersions (Join-Path $Root "ide\vscode\package-lock.json") $Version
 Set-FirstJsonVersion (Join-Path $Root "ide\sublime\sublime-package.json") $Version
 
+$GoVersionPath = Join-Path $Root "internal\godoccli\version.go"
+$GoVersion = Get-Content $GoVersionPath -Raw
+$GoVersion = $GoVersion -replace 'const Version = "[^"]+"', "const Version = `"$Version`""
+Write-Utf8NoBom $GoVersionPath $GoVersion
+
 Write-Host "release manifests set to $Version"

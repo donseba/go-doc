@@ -21,14 +21,21 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
 
         val project = file.project
         val index = GoDocIndex.load(project, virtualFile.path)
-        GoDocTemplateContext.typeReferenceAt(file.text, offset, index)?.let { reference ->
-            val type = index.types[reference.typeName] ?: return null
-            return targetElement(project, index, type.file, type.line, type.column)
+        GoDocTemplateContext.templateIncludeAt(file.text, offset, index)?.let { reference ->
+            return targetElement(project, index, reference.targetPath, reference.targetLine, reference.targetColumn)
         }
 
-        val contract = index.contractForFile(project, virtualFile.path) ?: return null
+        val contract = index.contractForFileAt(project, virtualFile.path, offset) ?: return null
+        GoDocTemplateContext.templateFunctionAt(file.text, offset, index, contract)?.let { reference ->
+            val fn = index.funcs[reference.funcName] ?: return null
+            return targetElement(project, index, fn.file, fn.line, fn.column)
+        }
+
         val reference = GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract) ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
+        if (contract.models[reference.memberName] == reference.ownerTypeName) {
+            return targetElement(project, index, owner.file, owner.line, owner.column)
+        }
         val field = owner.fields[reference.memberName]
         if (field != null) {
             return targetElement(project, index, field.file.ifBlank { owner.file }, field.line, field.column)
@@ -46,8 +53,9 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
     ): Array<PsiElement>? {
         if (targetFile.isBlank()) return null
         val root = index.rootPath ?: return null
+        val target = targetPath(root, targetFile)
         val targetVirtualFile = LocalFileSystem.getInstance()
-            .findFileByIoFile(File(root, targetFile)) ?: return null
+            .findFileByIoFile(target) ?: return null
         val targetPsiFile = PsiManager.getInstance(project).findFile(targetVirtualFile) ?: return null
         val document = FileDocumentManager.getInstance().getDocument(targetVirtualFile) ?: return arrayOf(targetPsiFile)
         val line = (targetLine - 1).coerceAtLeast(0)
@@ -59,5 +67,14 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
         }
 
         return arrayOf(targetPsiFile.findElementAt(targetOffset) ?: targetPsiFile)
+    }
+
+    private fun targetPath(root: String, targetFile: String): File {
+        if (targetFile.startsWith("\$GOROOT")) {
+            val goRoot = GoDocIndexer.goRoot(File(root)) ?: return File(root, targetFile)
+            return File(goRoot, targetFile.removePrefix("\$GOROOT").trimStart('/', '\\'))
+        }
+        val file = File(targetFile)
+        return if (file.isAbsolute) file else File(root, targetFile)
     }
 }

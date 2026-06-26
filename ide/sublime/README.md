@@ -24,7 +24,7 @@ Build the package from the repository root:
 task build:sublime
 ```
 
-Then install `dist/LSP-go-doc.sublime-package` into Sublime Text's
+Then install `dist/go-doc-sublime-*.sublime-package` into Sublime Text's
 `Installed Packages` folder.
 
 On Windows this is usually:
@@ -40,6 +40,14 @@ the LSP status. The language server command is:
 ["go-doc", "lsp"]
 ```
 
+Disable go-doc for one project with `.go-doc/config.json`:
+
+```json
+{
+  "enabled": false
+}
+```
+
 ## Template Contracts
 
 The package includes a small `Go Template HTML` syntax for `.gohtml` and `.tmpl`
@@ -48,7 +56,19 @@ Template contracts use `@model`:
 
 ```gotemplate
 {{/*
-@model page github.com/example/app.Page
+@model Page github.com/example/app.Page
 */}}
-{{ _page.Title }}
+{{ Page.Title }}
 ```
+
+`@model Page ...` is the editor-side entrance of the contract. Runtime code
+must still register a real `Page` template accessor before parsing, usually
+with go-doc's optional renderer. For plain `tmpl.Execute(w, page)` templates,
+use `@dot` and `{{ .Title }}` instead.
+
+## LSP Features
+
+The same `go-doc lsp` server powers completion, diagnostics, hover,
+go-to-definition, semantic tokens, and document symbols. It understands
+`@model`, `@dot`, `@func`, range/with dot context, typed function returns,
+template includes, named defines, and block calls.

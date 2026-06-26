@@ -23,6 +23,9 @@ func TestTodoRoutesRenderAndToggle(t *testing.T) {
 		if !strings.Contains(body, "Wire template contracts") || !strings.Contains(body, "Polish diagnostics") {
 			t.Fatalf("body does not contain todo list:\n%s", body)
 		}
+		if !strings.Contains(body, "3 total tasks") || !strings.Contains(body, "Projected review minutes: 15") {
+			t.Fatalf("body does not contain inherited default function output:\n%s", body)
+		}
 	})
 
 	t.Run("detail", func(t *testing.T) {
@@ -36,6 +39,9 @@ func TestTodoRoutesRenderAndToggle(t *testing.T) {
 		}
 		if !strings.Contains(rec.Body.String(), "Make unknown fields and invalid ranges easy to spot.") {
 			t.Fatalf("body does not contain selected todo detail:\n%s", rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "<dd>1</dd>") {
+			t.Fatalf("body does not contain child template default function output:\n%s", rec.Body.String())
 		}
 	})
 

@@ -1,0 +1,27 @@
+{{ define "content" }}
+<p>The renderer is optional. It helps register values according to template contracts while keeping <code>html/template</code> in charge.</p>
+
+<p><code>@model Page ...</code> is not native template syntax. The renderer turns that declaration into a real template function named <code>Page</code> before parsing. That function returns the matching Go value you pass to <code>Register</code>.</p>
+
+<pre><code>tmpl := template.New("main.gohtml")
+contractRenderer, _ := renderer.New(renderer.Config{
+    Mode:  renderer.Development,
+    Files: []string{"templates/main.gohtml"},
+    Funcs: template.FuncMap{
+        "asset":      app.Asset,
+        "formatDate": app.FormatDate,
+    },
+})
+
+_ = contractRenderer.Register(tmpl, page, selected)
+_, _ = tmpl.ParseFiles("templates/main.gohtml")
+_ = tmpl.ExecuteTemplate(w, "main.gohtml", nil)</code></pre>
+
+<p>After registration, <code>{{`{{ Page.Title }}`}}</code> works because <code>Page</code> exists as a template function. Without registration, use plain dot execution and <code>@dot</code> instead.</p>
+
+<h2>Development and production</h2>
+<p>Development mode can re-read template contracts while you are working. Production mode resolves contracts at startup for predictable runtime behavior.</p>
+
+<h2>Default functions</h2>
+<p><code>Config.Funcs</code> registers app-wide helpers before parsing templates. Use the same names in <code>.go-doc/config.json</code> when you also want editor completion and diagnostics for those helpers.</p>
+{{ end }}

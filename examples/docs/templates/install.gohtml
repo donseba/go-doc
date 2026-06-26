@@ -1,0 +1,27 @@
+{{ define "content" }}
+<h2>Install the CLI</h2>
+<pre><code>go install github.com/donseba/go-doc@latest</code></pre>
+
+<h2>Install the experimental generator</h2>
+<p>Only install this when you want to use <code>@gen</code> helper namespaces.</p>
+<pre><code>go install github.com/donseba/go-doc/cmd/godoc-exp-gen@latest</code></pre>
+
+<h2>Install an editor package</h2>
+<table class="table">
+    <thead><tr><th>Editor</th><th>Release asset</th></tr></thead>
+    <tbody>
+        <tr><td>GoLand</td><td><code>go-doc-goland-plugin-*.zip</code></td></tr>
+        <tr><td>VS Code</td><td><code>go-doc-vscode-*.vsix</code></td></tr>
+        <tr><td>Sublime Text</td><td><code>go-doc-sublime-*.sublime-package</code></td></tr>
+        <tr><td>Vim</td><td><code>go-doc-vim-*.zip</code></td></tr>
+        <tr><td>Neovim</td><td><code>go-doc-neovim-*.zip</code></td></tr>
+    </tbody>
+</table>
+
+<h2>No project files required</h2>
+<p>The editor integrations start <code>go-doc lsp</code>. The language server finds <code>go.mod</code>, scans the module in memory, and does not require a <code>.go-doc</code> folder.</p>
+
+<h2>Optional index file</h2>
+<p><code>.go-doc/index.json</code> is only needed when you explicitly want a generated artifact for CI, debugging, or other tools.</p>
+<pre><code>go-doc index -o .go-doc/index.json .</code></pre>
+{{ end }}

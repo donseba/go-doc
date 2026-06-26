@@ -10,14 +10,14 @@
         "id": "package-settings",
         "children": [
           {
-            "caption": "LSP-go-doc",
+            "caption": "go-doc",
             "children": [
               {
                 "caption": "Settings",
                 "command": "edit_settings",
                 "args": {
-                  "base_file": "${packages}/LSP-go-doc/LSP-go-doc.sublime-settings",
-                  "default": "// Settings in here override those in \"LSP-go-doc/LSP-go-doc.sublime-settings\"\n\n{\n\t$0\n}\n"
+                  "base_file": "${packages}/go-doc-sublime/go-doc-sublime.sublime-settings",
+                  "default": "// Settings in here override those in \"go-doc-sublime/go-doc-sublime.sublime-settings\"\n\n{\n\t$0\n}\n"
                 }
               }
             ]

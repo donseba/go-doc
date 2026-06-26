@@ -1,0 +1,16 @@
+{{ define "sidebar.gohtml" }}
+<aside class="sidebar">
+    <section class="side-group">
+        <h2>Guide</h2>
+        {{ range .Nav }}{{ if eq .Group "Guide" }}
+            <a class="side-link {{ if isActive .Path }}active{{ end }}" href="{{ .Path }}">{{ .Label }}</a>
+        {{ end }}{{ end }}
+    </section>
+    <section class="side-group">
+        <h2>Reference</h2>
+        {{ range .Nav }}{{ if eq .Group "Reference" }}
+            <a class="side-link {{ if isActive .Path }}active{{ end }}" href="{{ .Path }}">{{ .Label }}</a>
+        {{ end }}{{ end }}
+    </section>
+</aside>
+{{ end }}

@@ -1,0 +1,43 @@
+{{ define "content" }}
+<h2>Understood template shapes</h2>
+<ul class="docs-list">
+    <li>Root model access: <code>{{`{{ Page.Title }}`}}</code></li>
+    <li>Dot in ranges: <code>{{`{{ range Page.Items }}{{ .ID }}{{ end }}`}}</code></li>
+    <li>Assigned variables: <code>{{`{{ range $item := Page.Items }}{{ $item.Title }}{{ end }}`}}</code></li>
+    <li>Function results: <code>{{`{{ with firstUser }}{{ .Name }}{{ end }}`}}</code></li>
+    <li>Parenthesized function calls: <code>{{`{{ (userByID 2).Name }}`}}</code></li>
+    <li>Nested function calls: <code>{{`{{ add (div Page.Total 2) 1 }}`}}</code></li>
+    <li>Subtemplate dot contracts through <code>@dot</code>.</li>
+    <li>Template and block includes: <code>{{`{{ template "user_row.gohtml" . }}`}}</code></li>
+    <li>Scoped function calls inside <code>range</code> and <code>with</code>.</li>
+</ul>
+<p>Root model access assumes the runtime has registered the named model accessor. The LSP validates the template side of that contract; the optional renderer or your own glue provides the runtime side. For plain <code>tmpl.Execute(w, page)</code>, use <code>@dot</code> and <code>{{`{{ .Title }}`}}</code>.</p>
+
+<h2>Diagnostics</h2>
+<p>The LSP validates unknown accessors, invalid field names, non-rangeable expressions, unsupported function returns, incorrect function arguments, wrong include data, and missing include data.</p>
+
+<h2>Refresh behavior</h2>
+<p>The server republishes diagnostics on every document change and explicitly clears stale diagnostics first. That keeps edit loops such as renaming <code>@model PageInf</code> back to <code>@model PageInfo</code> from leaving old red underlines behind.</p>
+
+<h2>Include checks</h2>
+<p>When a called template declares <code>@dot</code>, go-doc compares the passed value with the child contract. This works for cross-file templates, same-file defines, named defines, and <code>block</code> calls.</p>
+<pre><code>{{`{{ range Page.Users }}
+    {{ template "user_row.gohtml" . }}
+{{ end }}
+
+{{ template "user_row.gohtml" }}
+{{ template "user_row.gohtml" Page.Users }}`}}</code></pre>
+<p>The first call is valid because dot is one <code>User</code>. Calling the child without data warns because the child expects data. Passing <code>Page.Users</code> warns because it is <code>[]User</code>, not one <code>User</code>.</p>
+<p>If more than one file defines the same block name, go-doc prefers the current document text, then the definition in the current file, before falling back to the wider template set.</p>
+
+<h2>Function checks</h2>
+<p>Declared and configured global functions are checked for arity, argument types, return shape, pipeline input, nested calls, and returned field access.</p>
+<pre><code>{{`{{ range Page.Users }}
+    {{ userLabel . }}
+    {{ .ID | div 2 }}
+{{ end }}
+
+{{ add (div Page.Total 2) 1 }}
+{{ (userByID 2).Name }}`}}</code></pre>
+<p>Use <code>@func</code> for one-off template helpers, or <code>.go-doc/config.json</code> for helpers available in every template.</p>
+{{ end }}

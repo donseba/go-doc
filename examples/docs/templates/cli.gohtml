@@ -1,0 +1,23 @@
+{{ define "content" }}
+<h2>Configuration</h2>
+<pre><code>{
+  "enabled": true,
+  "include": ["/"],
+  "exclude": ["vendor"],
+  "writeIndex": false,
+  "functions": {
+    "asset": "github.com/example/app.Asset",
+    "urlFor": "github.com/example/app.URLFor"
+  }
+}</code></pre>
+
+<p>Use <code>enabled: false</code> to disable go-doc for one project without uninstalling the editor package.</p>
+<p>Use <code>functions</code> for helpers that your application registers globally with <code>html/template.Funcs</code>. go-doc adds them to every template contract, while local <code>@func</code> annotations can still override a helper for one template.</p>
+<p>Use <code>writeIndex: true</code> only when you want editor adapters to maintain <code>.go-doc/index.json</code> after file changes. The language server does not need that file for normal completion, diagnostics, hover, or navigation.</p>
+
+<p>The scanner uses Go package information, so exported structs, fields, methods, aliases, imports, generics, and function return types are resolved through Go tooling rather than string guessing.</p>
+
+<h2>Optional index command</h2>
+<pre><code>go-doc index -o .go-doc/index.json .</code></pre>
+<p>The generated index is a cacheable artifact, not a runtime requirement. Without it, the language server scans the module at startup. With it, tools can inspect exactly what go-doc discovered.</p>
+{{ end }}

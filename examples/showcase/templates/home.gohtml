@@ -1,0 +1,62 @@
+{{/*
+@model Page github.com/donseba/go-doc/examples/showcase.ShowcasePage
+
+@func firstUser github.com/donseba/go-doc/examples/showcase.FirstUser
+@func userByID github.com/donseba/go-doc/examples/showcase.UserByID
+*/}}
+{{ define "content" }}
+<p class="eyebrow">Template contracts</p>
+<h1>{{ Page.Title }}</h1>
+<p class="lead">{{ Page.Description }}</p>
+
+<section id="model" class="example-grid">
+    <article class="panel">
+        <h2>@model</h2>
+        <p>{{ Page.Title }} has {{ len Page.Users }} users and was rendered at {{ Page.GeneratedAt.Format "15:04:05" }}.</p>
+    </article>
+    <article id="func" class="panel">
+        <h2>@func with complex return</h2>
+        {{ with firstUser }}
+            <p>{{ .Name }} is {{ .Status }} and has {{ len .Permissions }} permissions.</p>
+        {{ end }}
+    </article>
+    <article class="panel">
+        <h2>Parenthesized function result</h2>
+        <p>{{ (userByID 2).Name }} can be completed after the dot.</p>
+    </article>
+</section>
+
+<section class="panel">
+    <h2>Where to look next</h2>
+    <p>The contracts page explains the annotation syntax. The table page shows a parent template receiving a slice and passing each row into a child template with <code>@dot</code>.</p>
+    <p class="button-row">
+        <a class="button-link" href="/contracts">View contracts</a>
+        <a class="button-link secondary" href="/table">View table rows</a>
+    </p>
+</section>
+
+<section class="panel">
+    <h2>Minimal template shape</h2>
+    <p>This is the smallest useful contract: one model, fields in the body, and a function that returns a typed value.</p>
+<pre><code>&#123;&#123;/*
+&#64;model Page github.com/donseba/go-doc/examples/showcase.ShowcasePage
+&#64;func userByID github.com/donseba/go-doc/examples/showcase.UserByID
+*/&#125;&#125;
+
+&lt;h1&gt;&#123;&#123; Page.Title &#125;&#125;&lt;/h1&gt;
+&#123;&#123; (userByID 2).Name &#125;&#125;</code></pre>
+</section>
+
+<section class="panel">
+    <h2>Go setup</h2>
+    <p>The renderer registers the value that matches the template contract, then normal <code>html/template</code> parsing and execution continues. That is why <code>{{`{{ Page.Title }}`}}</code> works here: <code>Page</code> has been registered as a template function.</p>
+<pre><code>{{`tmpl := template.New("layout.gohtml").Funcs(template.FuncMap{
+    "userByID": UserByID,
+})
+
+err := contractRenderer.Register(tmpl, page)
+if err != nil {
+    return err
+}`}}</code></pre>
+</section>
+{{ end }}

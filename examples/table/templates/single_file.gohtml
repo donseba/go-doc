@@ -1,0 +1,57 @@
+{{/* @model Page github.com/donseba/go-doc/examples/table.UserTablePage */}}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{{ Page.Title }} - single file sections</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5; color: #1c1917; }
+        table { border-collapse: separate; border-spacing: 0; min-width: 42rem; border: 1px solid #d6d3d1; border-radius: .5rem; overflow: hidden; }
+        th, td { padding: .75rem 1rem; text-align: left; border-bottom: 1px solid #e7e5e4; }
+        tbody tr:last-child td { border-bottom: 0; }
+        th { background: #f5f5f4; }
+        code { background: #f5f5f4; border-radius: .25rem; padding: .1rem .3rem; }
+        .pill { display: inline-block; border: 1px solid #0f766e; border-radius: 999px; padding: .1rem .5rem; color: #0f766e; font-size: .875rem; }
+    </style>
+</head>
+<body>
+    <header>
+        <p>go-doc single-file template example</p>
+        <h1>{{ Page.Title }}</h1>
+        <p>The main template owns <code>@model Page</code>. Local sections below the page declare their own <code>@dot</code> contracts.</p>
+    </header>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ range Page.Users }}
+                {{ template "single_file_user_row" . }}
+            {{ end }}
+        </tbody>
+    </table>
+</body>
+</html>
+
+{{ define "single_file_user_row" }}
+{{/* @dot github.com/donseba/go-doc/examples/table.User */}}
+<tr id="single-user-{{ .ID }}">
+    <td>{{ .ID }}</td>
+    <td>{{ .Name }}</td>
+    <td>{{ .Email }}</td>
+    <td>{{ .Role }}</td>
+    <td>{{ template "single_file_status" . }}</td>
+</tr>
+{{ end }}
+
+{{ define "single_file_status" }}
+{{/* @dot github.com/donseba/go-doc/examples/table.User */}}
+<span class="pill">{{ .Status }}</span>
+{{ end }}

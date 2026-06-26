@@ -67,9 +67,10 @@ tasks:
       - echo "CircleCI installs JDK and Gradle explicitly; see .circleci/config.yml."
 
   install:cli:
-    desc: Install the go-doc CLI into GOPATH/bin
+    desc: Install the go-doc CLIs into GOPATH/bin
     cmds:
       - go install .
+      - go install ./cmd/godoc-exp-gen
 
   test:
     desc: Run Go tests

@@ -1,0 +1,21 @@
+{{ define "content" }}
+<table class="table">
+    <thead><tr><th>Annotation</th><th>Meaning</th><th>Template use</th></tr></thead>
+    <tbody>
+        <tr><td><code>@model Page pkg.Page</code></td><td>Named root value</td><td><code>{{`{{ Page.Title }}`}}</code></td></tr>
+        <tr><td><code>@dot pkg.User</code></td><td>The current dot value</td><td><code>{{`{{ .Name }}`}}</code></td></tr>
+        <tr><td><code>@func userByID pkg.UserByID</code></td><td>Declared template function</td><td><code>{{`{{ (userByID 2).Name }}`}}</code></td></tr>
+    </tbody>
+</table>
+
+<h2>Runtime side</h2>
+<p><code>@model</code> is a named accessor contract. The editor learns the type from the annotation, but runtime rendering still needs a value registered under that name. The optional renderer does this by creating a template function named after the model.</p>
+<p><code>@dot</code> is the contract for normal dot data. Use it when your application executes a template with <code>tmpl.Execute(w, value)</code> or passes dot into a child template.</p>
+
+<h2>Functions can return complex values</h2>
+<pre><code>{{`{{ with firstUser }}
+    {{ .Name }} - {{ .Status }}
+{{ end }}
+
+{{ (userByID 2).Email }}`}}</code></pre>
+{{ end }}

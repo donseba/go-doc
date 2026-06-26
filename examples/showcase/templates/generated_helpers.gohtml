@@ -1,0 +1,61 @@
+{{/*
+@model Page github.com/donseba/go-doc/examples/showcase.ShowcasePage
+*/}}
+{{ define "content" }}
+<p class="eyebrow">Generated helpers</p>
+<h1>Package-like helper namespaces</h1>
+<p class="lead"><code>@gen</code> is an experimental bridge for teams that keep helper functions in small Go packages and want templates to call them through namespaced helpers.</p>
+
+<section class="panel">
+    <h2>Rendered idea</h2>
+    <div class="example-grid">
+        <article class="result-card">
+            <h3>time</h3>
+            <p><code>{{`{{ time.Format Page.GeneratedAt "15:04:05" }}`}}</code></p>
+            <strong>{{ Page.GeneratedAt.Format "15:04:05" }}</strong>
+        </article>
+        <article class="result-card">
+            <h3>money</h3>
+            <p><code>{{`{{ money.EUR .MonthlyCents }}`}}</code></p>
+            <strong>EUR 129.00</strong>
+        </article>
+        <article class="result-card">
+            <h3>text</h3>
+            <p><code>{{`{{ text.Initials .Owner }}`}}</code></p>
+            <strong>AL</strong>
+        </article>
+    </div>
+</section>
+
+<section class="code-grid">
+    <article class="panel">
+        <h2>Template contract</h2>
+<pre><code>&#123;&#123;/*
+&#64;model Page github.com/donseba/go-doc/examples/exp-gen.Page
+&#64;gen time github.com/donseba/go-doc/examples/exp-gen/internal/timefuncs
+&#64;gen money github.com/donseba/go-doc/examples/exp-gen/internal/moneyfuncs
+&#64;gen text github.com/donseba/go-doc/examples/exp-gen/internal/textfuncs
+*/&#125;&#125;
+
+&#123;&#123; time.Format Page.GeneratedAt "15:04:05" &#125;&#125;
+&#123;&#123; money.EUR .MonthlyCents &#125;&#125;
+&#123;&#123; text.Initials .Owner &#125;&#125;</code></pre>
+    </article>
+    <article class="panel">
+        <h2>Generated wrapper</h2>
+<pre><code>godoc-exp-gen \
+  -package gen \
+  -out gen/gen.go</code></pre>
+<pre><code>{{`import "github.com/donseba/go-doc/examples/exp-gen/gen"
+
+tmpl := template.New("page.gohtml").Funcs(gen.FuncMap())`}}</code></pre>
+    </article>
+</section>
+
+<section class="panel">
+    <h2>Why this shape</h2>
+    <p>The source helpers live in <code>internal/timefuncs</code>, <code>internal/moneyfuncs</code>, and <code>internal/textfuncs</code>. The generated code lives in <code>gen/gen.go</code>. That keeps application-owned helpers separate from generated bridge code.</p>
+    <p><code>@gen</code> only registers helper namespaces. It does not create the <code>Page</code> model accessor. <code>@model Page ...</code> is its own two-way tunnel: the annotation declares the entrance, and the renderer or equivalent runtime glue registers a real <code>Page</code> template function before parsing.</p>
+    <p>The runnable version is in <code>examples/exp-gen</code>. It demonstrates multiple <code>@gen</code> declarations feeding one generated <code>FuncMap()</code>.</p>
+</section>
+{{ end }}

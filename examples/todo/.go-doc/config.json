@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "include": ["/"],
+  "exclude": ["vendor"],
+  "index": false,
+  "functions": {
+    "add": "github.com/donseba/go-doc/examples/todo.Add",
+    "sub": "github.com/donseba/go-doc/examples/todo.Sub",
+    "div": "github.com/donseba/go-doc/examples/todo.Div",
+    "mul": "github.com/donseba/go-doc/examples/todo.Mul"
+  }
+}

@@ -3,6 +3,7 @@ package com.donseba.godoc
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -48,11 +49,20 @@ data class GoDocFunc(
     val line: Int,
     val column: Int,
     val doc: String,
+    val result: String,
+    val signature: String,
+    val params: List<String>,
 )
 
 data class TemplateContract(
+    val name: String = "",
     val models: Map<String, String>,
-    val accessors: Map<String, String>,
+    val dot: String = "",
+    val funcs: Map<String, String> = emptyMap(),
+    val gens: Map<String, String> = emptyMap(),
+    val source: String = "",
+    val line: Int = 0,
+    val column: Int = 0,
 )
 
 class GoDocIndex(
@@ -72,10 +82,23 @@ class GoDocIndex(
 
         fun load(project: Project, filePath: String?): GoDocIndex {
             val checked = mutableListOf<String>()
-            val indexFile = findIndexFile(project, filePath, checked) ?: return empty(checkedPaths = checked)
+            val root = GoDocIndexer.findModuleRoot(filePath) ?: project.basePath?.let { File(it) }
+            if (root != null && !GoDocIndexer.enabled(project, root)) {
+                return empty(checkedPaths = checked)
+            }
+            val indexFile = if (root != null && GoDocIndexer.autoIndexEnabled(project, root)) {
+                findIndexFile(project, filePath, checked)
+            } else {
+                null
+            }
+                ?: root?.let { shadowIndexFile(it, checked) }
+                ?: run {
+                    if (root != null) GoDocIndexer.requestShadowIndex(project, root)
+                    return empty(checkedPaths = checked)
+                }
 
             return try {
-                parse(readIndexText(indexFile), indexFile.path, indexFile.parentFile.parentFile.path, checked)
+                parse(readIndexText(indexFile), indexFile.path, root?.path ?: indexFile.parentFile.parentFile.path, checked)
             } catch (err: Throwable) {
                 empty(
                     checkedPaths = checked,
@@ -95,6 +118,12 @@ class GoDocIndex(
             checkedPaths = checkedPaths,
             loadError = loadError,
         )
+
+        private fun shadowIndexFile(root: File, checked: MutableList<String>): File? {
+            val file = GoDocIndexer.shadowIndexFile(root)
+            checked.add(file.path)
+            return file.takeIf { it.isFile }
+        }
 
         private fun findIndexFile(project: Project, filePath: String?, checked: MutableList<String>): File? {
             if (filePath != null) {
@@ -236,13 +265,28 @@ class GoDocIndex(
 
             jsonObject(root, "templates")?.entrySet()?.forEach { (path, element) ->
                 val obj = element.asJsonObjectOrNull() ?: return@forEach
-                val models = jsonObject(obj, "models")?.entrySet()?.associate { (name, value) ->
+                val modelsObject = jsonObject(obj, "models")
+                val models = modelsObject?.entrySet()?.associate { (name, value) ->
                     name to value.asString
                 } ?: emptyMap()
-                val accessors = jsonObject(obj, "accessors")?.entrySet()?.associate { (name, value) ->
+                val funcsObject = jsonObject(obj, "funcs")
+                val templateFuncs = funcsObject?.entrySet()?.associate { (name, value) ->
                     name to value.asString
                 } ?: emptyMap()
-                templates[path] = TemplateContract(models = models, accessors = accessors)
+                val gensObject = jsonObject(obj, "gens")
+                val gens = gensObject?.entrySet()?.associate { (name, value) ->
+                    name to value.asString
+                } ?: emptyMap()
+                templates[path] = TemplateContract(
+                    name = obj.get("name")?.asString ?: "",
+                    models = models,
+                    dot = obj.get("dot")?.asString ?: "",
+                    funcs = templateFuncs,
+                    gens = gens,
+                    source = obj.get("source")?.asString ?: "",
+                    line = obj.get("line")?.asInt ?: 0,
+                    column = obj.get("column")?.asInt ?: 0,
+                )
             }
 
             jsonObject(root, "funcs")?.entrySet()?.forEach { (fqName, element) ->
@@ -255,6 +299,9 @@ class GoDocIndex(
                     line = obj.get("line")?.asInt ?: 0,
                     column = obj.get("column")?.asInt ?: 0,
                     doc = obj.get("doc")?.asString ?: "",
+                    result = obj.get("result")?.asString ?: "",
+                    signature = obj.get("signature")?.asString ?: "",
+                    params = obj.get("params")?.asJsonArray?.mapNotNull { it.asString } ?: emptyList(),
                 )
             }
 
@@ -286,6 +333,17 @@ class GoDocIndex(
 
     fun contractForFile(project: Project, filePath: String?): TemplateContract? {
         val path = filePath ?: return null
+        val text = templateText(path)
+        return contractForFileText(project, path, text, null)
+    }
+
+    fun contractForFileAt(project: Project, filePath: String?, offset: Int): TemplateContract? {
+        val path = filePath ?: return null
+        val text = templateText(path)
+        return contractForFileText(project, path, text, offset)
+    }
+
+    private fun contractForFileText(project: Project, path: String, text: String?, offset: Int?): TemplateContract? {
         val basePath = rootPath ?: project.basePath ?: return null
         val relative = try {
             File(basePath).toPath().relativize(File(path).toPath()).toString().replace('\\', '/')
@@ -293,9 +351,34 @@ class GoDocIndex(
             path.replace('\\', '/')
         }
         val normalizedPath = path.replace('\\', '/')
-        return templates[relative] ?: templates.entries.firstOrNull { (templatePath, _) ->
+        val base = templates[relative] ?: templates.entries.firstOrNull { (templatePath, _) ->
             relative.endsWith(templatePath) || normalizedPath.endsWith(templatePath)
         }?.value
+        val activeBase = offset
+            ?.let { activeDefineNameAt(text.orEmpty(), it) }
+            ?.let { defineName -> templateByNameInFile(relative, defineName)?.second }
+            ?: base
+        return mergeInlineContract(path, activeBase)
+    }
+
+    fun templateByName(name: String): Pair<String, TemplateContract>? {
+        val normalized = name.trimStart('/').replace('\\', '/')
+        val entry = templates.entries.firstOrNull { (path, _) ->
+            val templatePath = path.replace('\\', '/')
+            templatePath == normalized ||
+                templatePath.substringAfterLast('/') == normalized ||
+                templatePath.endsWith("/$normalized")
+        } ?: templates.entries.firstOrNull { (_, contract) ->
+            contract.name == normalized
+        }
+        return entry?.let { it.key to it.value }
+    }
+
+    private fun templateByNameInFile(relative: String, name: String): Pair<String, TemplateContract>? {
+        val normalized = relative.replace('\\', '/')
+        return templates.entries.firstOrNull { (_, contract) ->
+            contract.name == name && contract.source.replace('\\', '/') == normalized
+        }?.let { it.key to it.value } ?: templateByName(name)
     }
 
     fun fieldsForType(typeName: String?): Map<String, GoDocField> {
@@ -318,19 +401,83 @@ class GoDocIndex(
         if (clean.isBlank()) return null
 
         if (clean == ".") return dotType
+        parenthesizedExpressionPath(clean)?.let { (inner, path) ->
+            val rootType = resolveExpressionValueType(contract, inner, dotType) ?: return null
+            return resolveFieldValuePath(rootType, path)
+        }
+        resolveFunctionCommandValueType(contract, clean)?.let { return it }
 
         val parts = clean.split('.').filter { it.isNotBlank() }
         if (parts.isEmpty()) return null
 
         val root = parts.first()
+        val path: List<String>
         val rootType = when {
-            root.startsWith("_") -> contract.accessors[root]
-            root.startsWith("$") -> contract.accessors[root]
-            clean.startsWith(".") -> dotType
-            else -> null
+            root == "_" -> {
+                path = parts.drop(2)
+                parts.getOrNull(1)?.let { contract.models[it] }
+            }
+            root.startsWith("$") -> {
+                path = parts.drop(1)
+                contract.models[root]
+            }
+            clean.startsWith(".") -> {
+                path = parts
+                dotType
+            }
+            else -> {
+                path = parts.drop(1)
+                contract.models[root] ?: functionResultValueType(contract, root)
+            }
         } ?: return null
 
-        return resolveFieldValuePath(rootType, parts.drop(1))
+        return resolveFieldValuePath(rootType, path)
+    }
+
+    private fun resolveFunctionCommandValueType(contract: TemplateContract, expression: String): String? {
+        val fields = expression.split(Regex("""\s+""")).filter { it.isNotBlank() }
+        if (fields.isEmpty()) return null
+        if (fields.size == 1 && fields.first().contains('.')) return null
+        return functionResultValueType(contract, fields.first())
+    }
+
+    private fun parenthesizedExpressionPath(expression: String): Pair<String, List<String>>? {
+        val clean = expression.trim()
+        if (!clean.startsWith("(")) return null
+        val close = matchingCloseParen(clean, 0)
+        if (close < 0 || close + 1 >= clean.length || clean[close + 1] != '.') return null
+        val path = clean.substring(close + 1).split('.').filter { it.isNotBlank() }
+        if (path.isEmpty()) return null
+        return clean.substring(1, close).trim() to path
+    }
+
+    private fun matchingCloseParen(text: String, open: Int): Int {
+        if (open !in text.indices || text[open] != '(') return -1
+        var depth = 0
+        var inQuote = false
+        var escaped = false
+        for (index in open until text.length) {
+            val ch = text[index]
+            when {
+                escaped -> escaped = false
+                ch == '\\' -> escaped = true
+                ch == '"' -> inQuote = !inQuote
+                inQuote -> Unit
+                ch == '(' -> depth++
+                ch == ')' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        return -1
+    }
+
+    private fun functionResultValueType(contract: TemplateContract, name: String): String? {
+        val fnName = contract.funcs[name] ?: return null
+        val result = funcs[fnName]?.result?.takeIf { it.isNotBlank() } ?: return null
+        if (isCompositeValueType(result)) return result
+        return resolveGoType(result) ?: result
     }
 
     fun resolveFieldPath(rootType: String, fields: List<String>): String? {
@@ -403,4 +550,154 @@ class GoDocIndex(
         }
         return normalized
     }
+
+    private fun isCompositeValueType(typeExpr: String): Boolean {
+        val normalized = stripPointer(typeExpr)
+        return normalized.startsWith("[]") || normalized.startsWith("[") || normalized.startsWith("map[")
+    }
+
+    private fun normalizeType(typeExpr: String): String {
+        val lastSlash = typeExpr.lastIndexOf('/')
+        val lastDot = typeExpr.lastIndexOf('.')
+        return if (lastSlash > lastDot) {
+            typeExpr.substring(0, lastSlash) + "." + typeExpr.substring(lastSlash + 1)
+        } else {
+            typeExpr
+        }
+    }
+
+    private fun mergeInlineContract(filePath: String, base: TemplateContract?): TemplateContract? {
+        val rawText = templateText(filePath) ?: return base
+        val text = contractScanText(contractAnnotationText(rawText, base))
+        val matches = modelPattern.findAll(text).toList()
+        val dotMatch = dotPattern.find(text)
+        val funcMatches = funcPattern.findAll(text).toList()
+        val genMatches = genPattern.findAll(text).toList()
+        if (matches.isEmpty() && dotMatch == null && funcMatches.isEmpty() && genMatches.isEmpty()) return base
+
+        val models = if (matches.isEmpty()) base?.models.orEmpty().toMutableMap() else matches.associate { match ->
+            val name = match.groupValues[1]
+            val rawType = match.groupValues[2]
+            val typeName = resolveGoType(rawType) ?: rawType
+            name to typeName
+        }.toMutableMap()
+        val dot = dotMatch?.let { match ->
+            val rawType = normalizeType(match.groupValues[1])
+            resolveGoType(rawType) ?: rawType
+        } ?: base?.dot.orEmpty()
+        val funcs = base?.funcs.orEmpty() + funcMatches.associate { match ->
+            match.groupValues[1] to normalizeType(match.groupValues[2])
+        }
+        val gens = (base?.gens.orEmpty() + genMatches.associate { match ->
+            match.groupValues[1] to match.groupValues[2]
+        })
+        for ((name, _) in gens) {
+            val generatedType = "$GEN_TYPE_PREFIX$name"
+            if (types.containsKey(generatedType)) {
+                models[name] = generatedType
+            }
+        }
+        return TemplateContract(models = models, dot = dot, funcs = funcs, gens = gens)
+    }
+
+    private fun contractAnnotationText(text: String, base: TemplateContract?): String {
+        val name = base?.name.orEmpty()
+        if (name.isNotBlank()) {
+            return defineBodyText(text, name) ?: text
+        }
+        return topLevelTemplateText(text)
+    }
+
+    private fun topLevelTemplateText(text: String): String {
+        val out = StringBuilder()
+        var cursor = 0
+        for (block in defineBlocks(text)) {
+            if (block.start > cursor) out.append(text.substring(cursor, block.start))
+            cursor = maxOf(cursor, block.end)
+        }
+        if (cursor < text.length) out.append(text.substring(cursor))
+        return out.toString()
+    }
+
+    private fun defineBodyText(text: String, name: String): String? {
+        return defineBlocks(text).firstOrNull { it.name == name }?.let { text.substring(it.bodyStart, it.bodyEnd) }
+    }
+
+    private fun activeDefineNameAt(text: String, offset: Int): String? {
+        val boundedOffset = offset.coerceIn(0, text.length)
+        val stack = mutableListOf<String>()
+        for (match in templateActionPattern.findAll(text.substring(0, boundedOffset))) {
+            val content = actionContent(match.value) ?: continue
+            val define = defineActionPattern.matchEntire(content)
+            if (define != null) {
+                stack.add(define.groupValues[1])
+                continue
+            }
+            if (content == "end" && stack.isNotEmpty()) stack.removeAt(stack.lastIndex)
+        }
+        return stack.lastOrNull()
+    }
+
+    private fun defineBlocks(text: String): List<DefineBlock> {
+        data class OpenDefine(val name: String, val start: Int, val bodyStart: Int)
+        val stack = mutableListOf<OpenDefine>()
+        val blocks = mutableListOf<DefineBlock>()
+        for (match in templateActionPattern.findAll(text)) {
+            val content = actionContent(match.value) ?: continue
+            val define = defineActionPattern.matchEntire(content)
+            if (define != null) {
+                stack.add(OpenDefine(define.groupValues[1], match.range.first, match.range.last + 1))
+                continue
+            }
+            if (content == "end" && stack.isNotEmpty()) {
+                val open = stack.removeAt(stack.lastIndex)
+                blocks.add(DefineBlock(open.name, open.start, match.range.last + 1, open.bodyStart, match.range.first))
+            }
+        }
+        return blocks.sortedBy { it.start }
+    }
+
+    private fun actionContent(action: String): String? {
+        val start = action.indexOf("{{")
+        val end = action.lastIndexOf("}}")
+        if (start < 0 || end < start) return null
+        return action.substring(start + 2, end).trim().trim('-').trim()
+    }
+
+    private fun templateText(filePath: String): String? {
+        val virtualFile = LocalFileSystem.getInstance().findFileByIoFile(File(filePath))
+        if (virtualFile != null) {
+            FileDocumentManager.getInstance().getDocument(virtualFile)?.let { document ->
+                return document.text
+            }
+        }
+        return try {
+            File(filePath).readText()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun contractScanText(text: String): String {
+        val matches = templateCommentPattern.findAll(text).map { it.groupValues[1].trim() }.filter { it.isNotBlank() }.toList()
+        if (matches.isEmpty()) return text
+        return matches.joinToString(separator = "\n", postfix = "\n")
+    }
+
+    private val modelPattern = Regex("""(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$""")
+    private val dotPattern = Regex("""(?m)^\s*@dot\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$""")
+    private val funcPattern = Regex("""(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$""")
+    private val genPattern = Regex("""(?m)^\s*@gen\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$""")
+    private val templateCommentPattern = Regex("""(?s)\{\{/\*(.*?)\*/\}\}""")
+    private val templateActionPattern = Regex("""\{\{\s*(?:-)?\s*[^}]*\}\}""")
+    private val defineActionPattern = Regex("define\\s+\"([^\"]+)\"")
+    private val GEN_TYPE_PREFIX = "\$go-doc/gen."
+
+    private data class DefineBlock(
+        val name: String,
+        val start: Int,
+        val end: Int,
+        val bodyStart: Int,
+        val bodyEnd: Int,
+    )
 }

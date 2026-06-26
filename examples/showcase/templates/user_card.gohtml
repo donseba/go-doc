@@ -1,0 +1,20 @@
+{{ define "user_card.gohtml" }}
+{{/*
+@dot github.com/donseba/go-doc/examples/showcase.User
+*/}}
+<article class="user-card">
+    <div class="user-card-header">
+        <span class="avatar">{{ .Initials }}</span>
+        <span>
+            <strong>{{ .Name }}</strong>
+            <small>{{ .Email }}</small>
+        </span>
+    </div>
+    <p><code>{{ .Role }}</code> <span class="badge">{{ .Status }}</span></p>
+    <ul class="plain-list">
+        {{ range .Permissions }}
+            <li>{{ .Name }}: {{ .Level }}</li>
+        {{ end }}
+    </ul>
+</article>
+{{ end }}
