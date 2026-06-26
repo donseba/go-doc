@@ -17,7 +17,6 @@ GOLAND_VERSION="$(
 )"
 VSCODE_VERSION="$(cd "${ROOT}/ide/vscode" && node -p "require('./package.json').version")"
 SUBLIME_VERSION="$(cd "${ROOT}" && python -c 'import json, pathlib; print(json.loads(pathlib.Path("ide/sublime/sublime-package.json").read_text())["version"])' 2>/dev/null || python3 -c 'import json, pathlib; print(json.loads(pathlib.Path("ide/sublime/sublime-package.json").read_text())["version"])')"
-GODOC_VERSION="$(sed -nE 's/^const Version = "([^"]+)"/\1/p' "${ROOT}/internal/godoccli/version.go")"
 
 if [[ "${GOLAND_VERSION}" != "${VERSION}" ]]; then
   echo "GoLand plugin version ${GOLAND_VERSION} does not match tag ${TAG}" >&2
@@ -31,10 +30,6 @@ fi
 
 if [[ "${SUBLIME_VERSION}" != "${VERSION}" ]]; then
   echo "Sublime Text package version ${SUBLIME_VERSION} does not match tag ${TAG}" >&2
-  exit 1
-fi
-if [[ "${GODOC_VERSION}" != "${VERSION}" ]]; then
-  echo "go-doc CLI version ${GODOC_VERSION} does not match tag ${TAG}" >&2
   exit 1
 fi
 

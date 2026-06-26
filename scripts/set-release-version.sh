@@ -36,7 +36,4 @@ tmp="$(mktemp)"
 jq --arg version "${VERSION}" '.version = $version' "${ROOT}/ide/sublime/sublime-package.json" > "${tmp}"
 mv "${tmp}" "${ROOT}/ide/sublime/sublime-package.json"
 
-sed -i.bak -E "s/const Version = \"[^\"]+\"/const Version = \"${VERSION}\"/" "${ROOT}/internal/godoccli/version.go"
-rm -f "${ROOT}/internal/godoccli/version.go.bak"
-
 echo "release manifests set to ${VERSION}"
