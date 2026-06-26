@@ -432,6 +432,56 @@ func Asset(path string) string {
 	}
 }
 
+func TestBuildIndexProjectsGenNamespace(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "page.go", `package app
+
+import "time"
+
+type Page struct {
+	GeneratedAt time.Time
+}
+`)
+	writeFile(t, root, "viewfuncs/viewfuncs.go", `package viewfuncs
+
+import "time"
+
+// FormatTime formats t.
+func FormatTime(t time.Time, layout string) string {
+	return t.Format(layout)
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@model Page Page
+@gen view example.com/app/viewfuncs
+*/}}
+{{ view.FormatTime Page.GeneratedAt "15:04:05" }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if tmpl.Gens["view"] != "example.com/app/viewfuncs" {
+		t.Fatalf("@gen view = %q", tmpl.Gens["view"])
+	}
+	genType := tmpl.Models["view"]
+	if genType == "" {
+		t.Fatalf("@gen namespace was not projected into models: %#v", tmpl)
+	}
+	viewType := idx.Types[genType]
+	if viewType.File != "viewfuncs/viewfuncs.go" || viewType.Line != 1 || viewType.Column != 1 {
+		t.Fatalf("generated namespace target = %#v, want source package file anchor", viewType)
+	}
+	if viewType.Methods["FormatTime"].Type != "string" {
+		t.Fatalf("FormatTime method = %#v", viewType.Methods["FormatTime"])
+	}
+}
+
 func TestBuildIndexLetsLocalFunctionOverrideConfigDefault(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")

@@ -1,0 +1,45 @@
+{{ define "content" }}
+<div class="callout">
+    <strong>Experimental, but useful.</strong>
+    <p><code>@gen</code> does not import Go packages at runtime. It generates a small Go bridge that your application imports and registers like any other <code>template.FuncMap</code>.</p>
+</div>
+
+<h2>Template contract</h2>
+<p>A template declares helper namespaces next to its normal model contract.</p>
+<pre><code>&#123;&#123;/*
+&#64;model Page github.com/example/app.Page
+&#64;gen time github.com/example/app/internal/timefuncs
+&#64;gen money github.com/example/app/internal/moneyfuncs
+&#64;gen text github.com/example/app/internal/textfuncs
+*/&#125;&#125;
+
+&lt;p&gt;&#123;&#123; time.Format Page.GeneratedAt "15:04:05" &#125;&#125;&lt;/p&gt;
+&lt;p&gt;&#123;&#123; money.EUR .MonthlyCents &#125;&#125;&lt;/p&gt;
+&lt;p&gt;&#123;&#123; text.Initials .Owner &#125;&#125;&lt;/p&gt;</code></pre>
+
+<h2>Folder shape</h2>
+<p>Keep normal helper code under <code>internal/</code>. Put the generated wrapper in a small <code>gen</code> package.</p>
+<pre><code>internal/timefuncs/timefuncs.go
+internal/moneyfuncs/moneyfuncs.go
+internal/textfuncs/textfuncs.go
+
+gen/gen.go</code></pre>
+
+<h2>Generation</h2>
+<pre><code>go install github.com/donseba/go-doc/cmd/godoc-exp-gen@latest
+
+godoc-exp-gen \
+  -package gen \
+  -out gen/gen.go</code></pre>
+
+<h2>Runtime registration</h2>
+<p>The generated package exposes one <code>FuncMap()</code>. Register it before parsing templates.</p>
+<pre><code>{{`import "github.com/example/app/gen"
+
+tmpl := template.New("page.gohtml").Funcs(gen.FuncMap())
+_, err := tmpl.ParseFiles("templates/page.gohtml")`}}</code></pre>
+<p>This only registers helper namespaces such as <code>time</code>, <code>money</code>, and <code>text</code>. A named model such as <code>Page</code> is a separate contract: <code>@model Page ...</code> tells go-doc what the template expects, and runtime code must register a real <code>Page</code> accessor before parsing. If the template is executed with dot data, use <code>@dot</code> and <code>{{`{{ .Title }}`}}</code> instead.</p>
+
+<h2>Editor behavior</h2>
+<p>The language server treats each <code>@gen</code> namespace as a synthetic typed value. That means completion, hover, diagnostics, and go-to-definition work for calls such as <code>time.Format</code>, <code>money.EUR</code>, and <code>text.Initials</code>.</p>
+{{ end }}

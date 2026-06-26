@@ -101,6 +101,11 @@ Template contracts use `@model`:
 {{ Page.Title }}
 ```
 
+`@model Page ...` is the editor-side entrance of the contract. Runtime code
+must still register a real `Page` template accessor before parsing, usually
+with go-doc's optional renderer. For plain `tmpl.Execute(w, page)` templates,
+use `@dot` and `{{ .Title }}` instead.
+
 ## LSP Features
 
 The Neovim package only starts the server. Completion, diagnostics, hover,

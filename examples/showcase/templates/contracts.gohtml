@@ -11,18 +11,22 @@
 
 <section id="model" class="panel">
     <h2>@model</h2>
-    <p>Use <code>@model</code> when the template receives a named root value. The declared name is the accessor used in the template.</p>
+    <p>Use <code>@model</code> when the template receives a named root value. The declared name is the accessor used in the template, and runtime code must register that accessor before parsing.</p>
 <pre><code>&#123;&#123;/*
 &#64;model Page github.com/donseba/go-doc/examples/showcase.ShowcasePage
 */&#125;&#125;
 
 &lt;h1&gt;&#123;&#123; Page.Title &#125;&#125;&lt;/h1&gt;
 &lt;p&gt;&#123;&#123; len Page.Users &#125;&#125; users&lt;/p&gt;</code></pre>
+<pre><code>{{`tmpl := template.New("layout.gohtml")
+err := contractRenderer.Register(tmpl, page)
+_, err = tmpl.ParseFiles("layout.gohtml")`}}</code></pre>
+    <p>That registration creates the runtime side of the tunnel: a template function named <code>Page</code> returning the matched Go value.</p>
 </section>
 
 <section id="dot" class="panel">
     <h2>@dot</h2>
-    <p>Use <code>@dot</code> for fragments that are executed with dot set to one value, such as a table row, card, or child template.</p>
+    <p>Use <code>@dot</code> for fragments that are executed with dot set to one value, such as a table row, card, child template, or direct <code>tmpl.Execute(w, value)</code> call.</p>
 <pre><code>&#123;&#123;/*
 &#64;dot github.com/donseba/go-doc/examples/showcase.User
 */&#125;&#125;
@@ -49,7 +53,7 @@
 
 <section class="panel">
     <h2>Runtime shape</h2>
-    <p>The annotations describe intent for tooling. Runtime rendering can still use plain <code>html/template</code>, with the optional renderer registering values and functions against the declared contract.</p>
+    <p>The annotations describe intent for tooling. Runtime rendering can still use plain <code>html/template</code>, with the optional renderer registering values and functions against the declared contract. Without that runtime registration, named accessors such as <code>Page</code> do not exist.</p>
 <pre><code>{{`tmpl := template.New("layout.gohtml").Funcs(template.FuncMap{
     "userByID": UserByID,
 })

@@ -1009,6 +1009,7 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 	inlineMatches := modelPattern.FindAllStringSubmatch(text, -1)
 	models := make(map[string]string, len(base.Models)+len(inlineMatches))
 	funcs := make(map[string]string, len(base.Funcs))
+	gens := make(map[string]string, len(base.Gens))
 	dot := base.Dot
 	if len(inlineMatches) == 0 {
 		for key, value := range base.Models {
@@ -1017,6 +1018,9 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 	}
 	for key, value := range base.Funcs {
 		funcs[key] = value
+	}
+	for key, value := range base.Gens {
+		gens[key] = value
 	}
 	for _, match := range inlineMatches {
 		name := match[1]
@@ -1035,7 +1039,15 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 	for _, match := range funcPattern.FindAllStringSubmatch(text, -1) {
 		funcs[match[1]] = normalizeType(match[2])
 	}
-	return templateIndex{Models: models, Dot: dot, Funcs: funcs}
+	for _, match := range genPattern.FindAllStringSubmatch(text, -1) {
+		name := match[1]
+		pkg := strings.TrimSpace(match[2])
+		gens[name] = pkg
+		if typeName, ok := ensureGeneratedNamespaceType(&idx.indexFile, name, pkg); ok {
+			models[name] = typeName
+		}
+	}
+	return templateIndex{Models: models, Dot: dot, Funcs: funcs, Gens: gens}
 }
 
 func contractAnnotationText(text string, base templateIndex) string {
@@ -1425,7 +1437,8 @@ func inlineDefineContractByName(text string, idx lspIndex, name, source string) 
 		models := parseModels(body)
 		dot := parseDot(body)
 		funcs := parseFuncs(body)
-		if len(models) == 0 && dot == "" && len(funcs) == 0 {
+		gens := parseGens(body)
+		if len(models) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
 			return templateIndex{}, false
 		}
 		if dot != "" {
@@ -1438,12 +1451,18 @@ func inlineDefineContractByName(text string, idx lspIndex, name, source string) 
 				models[model] = resolved
 			}
 		}
+		for name, pkg := range gens {
+			if typeName, ok := ensureGeneratedNamespaceType(&idx.indexFile, name, pkg); ok {
+				models[name] = typeName
+			}
+		}
 		line, column := lineColumn(text, block.start)
 		return templateIndex{
 			Name:   name,
 			Models: models,
 			Dot:    dot,
 			Funcs:  funcs,
+			Gens:   gens,
 			Source: source,
 			Line:   line,
 			Column: column,

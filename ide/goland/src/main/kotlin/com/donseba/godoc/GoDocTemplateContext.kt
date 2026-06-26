@@ -345,8 +345,15 @@ object GoDocTemplateContext {
         val funcs = funcContractPattern.findAll(contractText).associate { match ->
             match.groupValues[1] to normalizeType(match.groupValues[2])
         }
-        if (models.isEmpty() && dot.isEmpty() && funcs.isEmpty()) return null
-        return TemplateContract(models = models, dot = dot, funcs = funcs)
+        val gens = genContractPattern.findAll(contractText).associate { match ->
+            match.groupValues[1] to match.groupValues[2]
+        }
+        if (models.isEmpty() && dot.isEmpty() && funcs.isEmpty() && gens.isEmpty()) return null
+        val generatedModels = gens.keys.mapNotNull { name ->
+            val typeName = "$GEN_TYPE_PREFIX$name"
+            if (index.types.containsKey(typeName)) name to typeName else null
+        }.toMap()
+        return TemplateContract(models = models + generatedModels, dot = dot, funcs = funcs, gens = gens)
     }
 
     private fun contractScanText(text: String): String {
@@ -513,6 +520,7 @@ object GoDocTemplateContext {
     private val modelContractPattern = Regex("""(?m)^\s*@model\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
     private val dotContractPattern = Regex("""(?m)^\s*@dot\s+([A-Za-z0-9_./\-]+)""")
     private val funcContractPattern = Regex("""(?m)^\s*@func\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
+    private val genContractPattern = Regex("""(?m)^\s*@gen\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
     private val modelTypePattern = Regex("""@model\s+[\u0024A-Za-z][A-Za-z0-9_]*\s+([A-Za-z0-9_./\-]+)""")
     private val dotTypePattern = Regex("""@dot\s+([A-Za-z0-9_./\-]+)""")
     private val typePatterns = listOf(modelTypePattern, dotTypePattern)
@@ -520,4 +528,5 @@ object GoDocTemplateContext {
     private val modelDeclarationPattern = Regex("""@model\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+[A-Za-z0-9_./\-]+""")
     private val templateCommentBodyPattern = Regex("""(?s)\{\{/\*(.*?)\*/\}\}""")
     private val tokenPattern = Regex("""[\u0024_A-Za-z][\u0024_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)*|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*""")
+    private const val GEN_TYPE_PREFIX = "\$go-doc/gen."
 }

@@ -112,7 +112,7 @@ private class GoDocPsiReference(
         (absoluteStart - element.textRange.startOffset).coerceAtLeast(0),
         (absoluteEnd - element.textRange.startOffset).coerceAtMost(element.textLength),
     ),
-    true,
+    false,
 ) {
     override fun resolve(): PsiElement? {
         return targetElement(element.project, target)

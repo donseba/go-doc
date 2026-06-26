@@ -49,7 +49,7 @@
 
 <section class="panel">
     <h2>Go setup</h2>
-    <p>The renderer registers the value that matches the template contract, then normal <code>html/template</code> parsing and execution continues.</p>
+    <p>The renderer registers the value that matches the template contract, then normal <code>html/template</code> parsing and execution continues. That is why <code>{{`{{ Page.Title }}`}}</code> works here: <code>Page</code> has been registered as a template function.</p>
 <pre><code>{{`tmpl := template.New("layout.gohtml").Funcs(template.FuncMap{
     "userByID": UserByID,
 })

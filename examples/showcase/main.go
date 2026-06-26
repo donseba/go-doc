@@ -73,6 +73,7 @@ func main() {
 		filepath.Join(base, "templates/layout.gohtml"),
 		filepath.Join(base, "templates/home.gohtml"),
 		filepath.Join(base, "templates/contracts.gohtml"),
+		filepath.Join(base, "templates/generated_helpers.gohtml"),
 		filepath.Join(base, "templates/table.gohtml"),
 		filepath.Join(base, "templates/user_card.gohtml"),
 		filepath.Join(base, "templates/user_row.gohtml"),
@@ -93,6 +94,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.render("home.gohtml", "home"))
 	mux.HandleFunc("/contracts", app.render("contracts.gohtml", "contracts"))
+	mux.HandleFunc("/generated-helpers", app.render("generated_helpers.gohtml", "generated-helpers"))
 	mux.HandleFunc("/table", app.render("table.gohtml", "table"))
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticBase()))))
 
@@ -136,6 +138,10 @@ func (app *App) renderTemplate(w http.ResponseWriter, r *http.Request, contentTe
 		return
 	}
 	if contentTemplate == "contracts.gohtml" && r.URL.Path != "/contracts" {
+		http.NotFound(w, r)
+		return
+	}
+	if contentTemplate == "generated_helpers.gohtml" && r.URL.Path != "/generated-helpers" {
 		http.NotFound(w, r)
 		return
 	}

@@ -40,6 +40,11 @@ Add a template contract:
 {{ Page.Title }}
 ```
 
+`@model Page ...` is the editor-side entrance of the contract. Runtime code
+must still register a real `Page` template accessor before parsing, usually
+with go-doc's optional renderer. For plain `tmpl.Execute(w, page)` templates,
+use `@dot` and `{{ .Title }}` instead.
+
 No `.go-doc` folder is required. The language server finds `go.mod` and builds
 an in-memory index for completion, diagnostics, hover, navigation, and semantic
 highlighting.
@@ -84,7 +89,7 @@ server indexes in memory. Enable it with the action above or with
 
 ```json
 {
-  "index": true
+  "writeIndex": true
 }
 ```
 

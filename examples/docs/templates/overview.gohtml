@@ -35,5 +35,15 @@
     &lt;a href="/items/&#123;&#123; .ID &#125;&#125;"&gt;&#123;&#123; .Label &#125;&#125;&lt;/a&gt;
 &#123;&#123; end &#125;&#125;</code></pre>
 
-<p>Go templates stay simple at runtime. The annotation gives tools enough information to understand what the template means.</p>
+<p>This is a two-way contract. The annotation tells the editor what <code>Page</code> should be. At runtime, your app still has to provide <code>Page</code>, usually through the optional renderer registering a template function before parsing.</p>
+
+<h2>Plain dot execution</h2>
+<p>If you call <code>tmpl.Execute(w, page)</code>, the value is available as dot. In that case the contract is <code>@dot</code>, and the template uses <code>.</code>.</p>
+<pre><code>&#123;&#123;/* &#64;dot github.com/example/app.Page */&#125;&#125;
+
+&lt;h1&gt;&#123;&#123; .Title &#125;&#125;&lt;/h1&gt;
+
+&#123;&#123; range .Items &#125;&#125;
+    &lt;a href="/items/&#123;&#123; .ID &#125;&#125;"&gt;&#123;&#123; .Label &#125;&#125;&lt;/a&gt;
+&#123;&#123; end &#125;&#125;</code></pre>
 {{ end }}

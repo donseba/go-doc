@@ -11,6 +11,7 @@
     <li>Template and block includes: <code>{{`{{ template "user_row.gohtml" . }}`}}</code></li>
     <li>Scoped function calls inside <code>range</code> and <code>with</code>.</li>
 </ul>
+<p>Root model access assumes the runtime has registered the named model accessor. The LSP validates the template side of that contract; the optional renderer or your own glue provides the runtime side. For plain <code>tmpl.Execute(w, page)</code>, use <code>@dot</code> and <code>{{`{{ .Title }}`}}</code>.</p>
 
 <h2>Diagnostics</h2>
 <p>The LSP validates unknown accessors, invalid field names, non-rangeable expressions, unsupported function returns, incorrect function arguments, wrong include data, and missing include data.</p>

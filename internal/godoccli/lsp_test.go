@@ -84,6 +84,50 @@ func TestLSPDiagnosticsIgnoreModelDeclarationAsTemplateCode(t *testing.T) {
 	}
 }
 
+func TestLSPGenNamespaceActsLikeTypedAccessor(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name: "Page",
+				Fields: map[string]fieldIndex{
+					"GeneratedAt": {Type: "time.Time"},
+				},
+			},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app/viewfuncs.FormatTime": {
+				Name:      "FormatTime",
+				Package:   "example.com/app/viewfuncs",
+				Result:    "string",
+				Signature: "func(t time.Time, layout string) string",
+				Params:    []string{"time.Time", "string"},
+			},
+		},
+		Short: map[string][]string{"Page": {"example.com/app.Page"}},
+	}}
+	text := `{{/*
+@model Page example.com/app.Page
+@gen view example.com/app/viewfuncs
+*/}}
+<p>Rendered at {{ view.FormatTime Page.GeneratedAt "15:04:05" }}.</p>`
+	contract := mergeInlineContract(text, idx, templateIndex{})
+
+	if contract.Models["view"] == "" {
+		t.Fatalf("@gen view was not projected into contract models: %#v", contract)
+	}
+	diagnostics := diagnosticsForText(text, idx, contract)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", diagnostics)
+	}
+	ref, ok := fieldReferenceAt(text, strings.Index(text, "FormatTime")+1, idx, contract)
+	if !ok {
+		t.Fatal("FormatTime did not resolve as a field/method reference")
+	}
+	if ref.fieldName != "FormatTime" {
+		t.Fatalf("fieldName = %q, want FormatTime", ref.fieldName)
+	}
+}
+
 func TestLSPDiagnosticsCatchModelFunctionNameCollisions(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{
@@ -1332,7 +1376,7 @@ type Todo struct {
 	if err := writeJSON(idx, filepath.Join(root, ".go-doc", "index.json")); err != nil {
 		t.Fatalf("writeJSON() error = %v", err)
 	}
-	writeTestFile(t, filepath.Join(root, ".go-doc", "config.json"), `{"index": true}`)
+	writeTestFile(t, filepath.Join(root, ".go-doc", "config.json"), `{"writeIndex": true}`)
 	templateText := `{{ todo.DueLabel }}`
 	uri := uriFromPath(filepath.Join(root, "todo.gohtml"))
 	server := &lspServer{
@@ -1656,7 +1700,7 @@ func TestLSPIndexForURIUsesNearestNestedIndex(t *testing.T) {
 	nested := filepath.Join(root, "examples", "todo")
 	writeTestFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n")
 	writeTestFile(t, filepath.Join(nested, "go.mod"), "module github.com/donseba/go-doc/examples/todo\n")
-	writeTestFile(t, filepath.Join(nested, ".go-doc", "config.json"), `{"index": true}`)
+	writeTestFile(t, filepath.Join(nested, ".go-doc", "config.json"), `{"writeIndex": true}`)
 	writeTestFile(t, filepath.Join(nested, "templates", "main.gohtml"), "")
 	if err := writeJSON(indexFile{
 		Version: 2,
@@ -1698,7 +1742,7 @@ func TestLSPDiagnosticsUseNestedIndexForDocument(t *testing.T) {
 {{ page.Title }}`
 	writeTestFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n")
 	writeTestFile(t, filepath.Join(nested, "go.mod"), "module github.com/donseba/go-doc/examples/todo\n")
-	writeTestFile(t, filepath.Join(nested, ".go-doc", "config.json"), `{"index": true}`)
+	writeTestFile(t, filepath.Join(nested, ".go-doc", "config.json"), `{"writeIndex": true}`)
 	writeTestFile(t, templatePath, text)
 	if err := writeJSON(indexFile{
 		Version: 2,
@@ -1741,7 +1785,7 @@ func TestLSPDiagnosticsRebuildWhenSourceNewerThanIndex(t *testing.T) {
 */}}
 {{ todo.Un }}`
 	writeTestFile(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
-	writeTestFile(t, filepath.Join(root, ".go-doc", "config.json"), `{"index": true}`)
+	writeTestFile(t, filepath.Join(root, ".go-doc", "config.json"), `{"writeIndex": true}`)
 	writeTestFile(t, filepath.Join(root, "todo.go"), `package app
 
 type Todo struct {

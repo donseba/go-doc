@@ -8,6 +8,10 @@
     </tbody>
 </table>
 
+<h2>Runtime side</h2>
+<p><code>@model</code> is a named accessor contract. The editor learns the type from the annotation, but runtime rendering still needs a value registered under that name. The optional renderer does this by creating a template function named after the model.</p>
+<p><code>@dot</code> is the contract for normal dot data. Use it when your application executes a template with <code>tmpl.Execute(w, value)</code> or passes dot into a child template.</p>
+
 <h2>Functions can return complex values</h2>
 <pre><code>{{`{{ with firstUser }}
     {{ .Name }} - {{ .Status }}

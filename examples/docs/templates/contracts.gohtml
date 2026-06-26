@@ -5,12 +5,17 @@
 </div>
 
 <h2>Model access</h2>
+<p><code>@model</code> declares a named accessor. That name must also exist at runtime. go-doc's renderer creates it by registering a template function with the same name before parsing.</p>
 <pre><code>&#123;&#123;/*
 &#64;model Page github.com/example/app.TodoPage
 */&#125;&#125;
 
 &lt;h1&gt;&#123;&#123; Page.Title &#125;&#125;&lt;/h1&gt;
 &lt;p&gt;&#123;&#123; Page.OpenCount &#125;&#125; open&lt;/p&gt;</code></pre>
+<pre><code>{{`tmpl := template.New("main.gohtml")
+_ = contractRenderer.Register(tmpl, page)
+_, _ = tmpl.ParseFiles("templates/main.gohtml")`}}</code></pre>
+<p>Without that registration, plain <code>html/template</code> cannot resolve <code>Page</code>. For direct <code>tmpl.Execute(w, page)</code>, use <code>@dot</code> and <code>{{`{{ .Title }}`}}</code> instead.</p>
 <p>Model names should not reuse template function names. If <code>mul</code> is a global helper or local <code>@func</code>, <code>@model mul ...</code> is reported as a collision because the runtime cannot safely treat the same identifier as both a value accessor and a function.</p>
 
 <h2>Dot access</h2>
@@ -20,7 +25,7 @@
 
 &lt;li&gt;&#123;&#123; .Title &#125;&#125; - &#123;&#123; .Status &#125;&#125;&lt;/li&gt;</code></pre>
 
-<p><code>@dot</code> is especially useful for row templates, card templates, and fragments rendered from a parent loop.</p>
+<p><code>@dot</code> matches normal template execution where the data is passed as dot, for example <code>tmpl.Execute(w, todo)</code>. It is especially useful for row templates, card templates, and fragments rendered from a parent loop.</p>
 
 <h2>Function access</h2>
 <pre><code>&#123;&#123;/*
@@ -35,6 +40,9 @@
 &lt;p&gt;&#123;&#123; (userByID 42).Email &#125;&#125;&lt;/p&gt;</code></pre>
 
 <p><code>@func</code> lets go-doc understand custom template functions, including argument checks and return types. If a function returns a struct, completion continues through <code>with</code> blocks and parenthesized calls.</p>
+
+<h2>The tunnel</h2>
+<p>Every contract has two sides. The template comment is the entrance: it documents what the template expects. The runtime registration is the exit: it makes that name or function actually available to <code>html/template</code>. go-doc can explain the tunnel, but your application still has to connect both ends.</p>
 
 <h2>Template inclusion</h2>
 <pre><code>&#123;&#123;/* parent.gohtml */&#125;&#125;

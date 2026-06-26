@@ -144,8 +144,8 @@ object GoDocIndexer {
         val config = File(root, ".go-doc/config.json")
         if (!config.isFile) return null
         val text = runCatching { config.readText() }.getOrNull() ?: return null
-        if (Pattern.compile("\"index\"\\s*:\\s*true").matcher(text).find()) return true
-        if (Pattern.compile("\"index\"\\s*:\\s*false").matcher(text).find()) return false
+        if (Pattern.compile("\"writeIndex\"\\s*:\\s*true").matcher(text).find()) return true
+        if (Pattern.compile("\"writeIndex\"\\s*:\\s*false").matcher(text).find()) return false
         return null
     }
 

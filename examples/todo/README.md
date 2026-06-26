@@ -9,9 +9,20 @@ three files:
 
 Each template declares the model it uses with `@model`, so editor integrations
 can provide completion, diagnostics, hover, and navigation in the file you are
-editing. Runtime rendering uses `renderer.RegisterFromFiles`, which scans those
-declarations and exposes the matched values through the declared model names,
-for example `{{ Page.Title }}`.
+editing.
+
+That model name is not magic template syntax. It is a two-way contract:
+
+- the template annotation is the entrance: `@model Page ...` says this template
+  expects a named accessor called `Page`
+- runtime registration is the exit: the renderer scans the declarations,
+  matches the Go values you pass, and registers a real template function named
+  `Page` before parsing
+
+That is why `{{ Page.Title }}` works in this example. Plain `html/template`
+would not know what `Page` is unless the application registers it. If you render
+with direct dot execution such as `tmpl.Execute(w, page)`, use `@dot` and
+`{{ .Title }}` instead.
 
 The app exposes:
 

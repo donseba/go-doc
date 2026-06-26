@@ -149,7 +149,7 @@ function scheduleRebuild(filePath) {
 function autoIndexEnabled(root) {
   if (vscode.workspace.getConfiguration("goDoc").get("autoIndex", false)) return true;
   const config = projectConfig(root);
-  return config && config.index === true;
+  return config && config.writeIndex === true;
 }
 
 function goDocEnabled(root) {

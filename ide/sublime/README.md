@@ -24,7 +24,7 @@ Build the package from the repository root:
 task build:sublime
 ```
 
-Then install `dist/go-doc-sublime.sublime-package` into Sublime Text's
+Then install `dist/go-doc-sublime-*.sublime-package` into Sublime Text's
 `Installed Packages` folder.
 
 On Windows this is usually:
@@ -60,6 +60,11 @@ Template contracts use `@model`:
 */}}
 {{ Page.Title }}
 ```
+
+`@model Page ...` is the editor-side entrance of the contract. Runtime code
+must still register a real `Page` template accessor before parsing, usually
+with go-doc's optional renderer. For plain `tmpl.Execute(w, page)` templates,
+use `@dot` and `{{ .Title }}` instead.
 
 ## LSP Features
 
