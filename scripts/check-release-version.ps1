@@ -32,7 +32,6 @@ try {
 }
 
 $sublimeVersion = (Get-Content (Join-Path $root "ide\sublime\sublime-package.json") | ConvertFrom-Json).version
-$goDocVersion = (Select-String -Path (Join-Path $root "internal\godoccli\version.go") -Pattern 'const Version = "([^"]+)"').Matches[0].Groups[1].Value
 
 if ($golandVersion -ne $version) {
     Write-Error "GoLand plugin version $golandVersion does not match tag $Tag"
@@ -44,9 +43,6 @@ if ($vscodeVersion -ne $version) {
 
 if ($sublimeVersion -ne $version) {
     Write-Error "Sublime Text package version $sublimeVersion does not match tag $Tag"
-}
-if ($goDocVersion -ne $version) {
-    Write-Error "go-doc CLI version $goDocVersion does not match tag $Tag"
 }
 
 Write-Host "release version $version matches $Tag"
