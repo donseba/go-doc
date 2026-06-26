@@ -68,7 +68,7 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                             )
                         }
 
-                    val contract = index.contractForFile(project, virtualFile.path) ?: return references.toTypedArray()
+                    val contract = index.contractForFileAt(project, virtualFile.path, elementRange.startOffset) ?: return references.toTypedArray()
                     GoDocTemplateContext.fieldReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index, contract)
                         .forEach { ref ->
                             val owner = index.types[ref.ownerTypeName] ?: return@forEach
@@ -129,8 +129,9 @@ private data class GoDocTarget(
 private fun targetElement(project: Project, target: GoDocTarget): PsiElement? {
     if (target.file.isBlank()) return null
     val root = target.root ?: project.basePath ?: return null
+    val targetFile = targetPath(root, target.file)
     val targetVirtualFile = LocalFileSystem.getInstance()
-        .findFileByIoFile(File(root, target.file)) ?: return null
+        .findFileByIoFile(targetFile) ?: return null
     val targetPsiFile = PsiManager.getInstance(project).findFile(targetVirtualFile) ?: return null
     val document = FileDocumentManager.getInstance().getDocument(targetVirtualFile) ?: return targetPsiFile
     val line = (target.line - 1).coerceAtLeast(0)
@@ -141,4 +142,13 @@ private fun targetElement(project: Project, target: GoDocTarget): PsiElement? {
         0
     }
     return targetPsiFile.findElementAt(targetOffset) ?: targetPsiFile
+}
+
+private fun targetPath(root: String, targetFile: String): File {
+    if (targetFile.startsWith("\$GOROOT")) {
+        val goRoot = GoDocIndexer.goRoot(File(root)) ?: return File(root, targetFile)
+        return File(goRoot, targetFile.removePrefix("\$GOROOT").trimStart('/', '\\'))
+    }
+    val file = File(targetFile)
+    return if (file.isAbsolute) file else File(root, targetFile)
 }

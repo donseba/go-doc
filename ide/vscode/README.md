@@ -5,14 +5,17 @@ VS Code integration for typed Go templates powered by `go-doc lsp`.
 ## Features
 
 - completions for `@model` Go type names
-- completions for typed template model names such as `Page.`
-- completions for dot context inside `range` blocks
+- completions for typed template model names, custom functions, and dot context
+  inside `range` and `with` blocks
 - completions for exported fields and methods
-- diagnostics for unknown model names and fields
-- diagnostics for invalid range sources such as `range page.Title`
-- hover and go to definition for contract types, fields, and methods
-- semantic highlighting for model types, model names, fields, and methods
-- debounced automatic index rebuilds
+- diagnostics for unknown model names, fields, invalid range sources, bad
+  function arguments, unsupported function returns, and wrong template include
+  data
+- hover and go to definition for contract types, fields, methods, functions, and
+  child templates
+- semantic highlighting for model types, model names, functions, fields, and
+  methods
+- optional debounced index rebuilds
 
 ## Requirements
 
@@ -22,20 +25,17 @@ Install the `go-doc` CLI and make sure it is available on `PATH`:
 go install github.com/donseba/go-doc@latest
 ```
 
-If the CLI is missing when the extension rebuilds the index, VS Code asks before
-running that install command for you.
+If the CLI is missing when the extension starts, VS Code asks before running
+that install command for you.
+
+On Windows, the extension starts the long-lived LSP from a temporary copy of
+`go-doc.exe`. That means `go install github.com/donseba/go-doc@latest` can
+replace the installed binary while VS Code is open. Restart the LSP to use the
+newly installed version.
+`go-doc: Show Index Status` shows both the installed CLI version and the active
+LSP copy version.
 
 ## Quick Start
-
-Generate the first index from a Go module root:
-
-```bash
-go-doc index -o .go-doc/index.json .
-```
-
-The language server can build an in-memory index when no generated file exists,
-but writing `.go-doc/index.json` lets VS Code rebuild and refresh the shared
-server state after edits.
 
 Add a template contract:
 
@@ -46,6 +46,13 @@ Add a template contract:
 {{ Page.Title }}
 ```
 
+No `.go-doc` folder is required. The language server finds `go.mod` and builds
+an in-memory index for completion, diagnostics, hover, navigation, and semantic
+highlighting.
+
+Writing `.go-doc/index.json` is optional. Use it only when you want a generated
+artifact for CI, debugging, or other tools.
+
 ## Commands
 
 - `go-doc: Rebuild Index`
@@ -55,5 +62,24 @@ Add a template contract:
 
 ## Settings
 
+- `goDoc.enabled`
 - `goDoc.autoIndex`
 - `goDoc.debounceMilliseconds`
+
+`goDoc.enabled` is enabled by default. Disable it globally in VS Code settings,
+or opt out per project with `.go-doc/config.json`:
+
+```json
+{
+  "enabled": false
+}
+```
+
+`goDoc.autoIndex` is disabled by default. You can also opt in per project with
+`.go-doc/config.json`:
+
+```json
+{
+  "index": true
+}
+```

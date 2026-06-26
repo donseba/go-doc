@@ -127,6 +127,47 @@ type User struct {
 	}
 }
 
+func TestBuildIndexScansOneLineTemplateCommentContracts(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "user.go", `package app
+
+type Page struct {
+	Users []User
+}
+
+type User struct {
+	Name string
+}
+
+func FirstUser() User {
+	return User{}
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/* @model Page Page */}}
+{{/* @func firstUser FirstUser */}}
+{{ define "table_row" }}{{/* @dot User */}}<td>{{ .Name }}</td>{{ end }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed for one-line annotations")
+	}
+	page := idx.Templates["templates/page.gohtml"]
+	if page.Models["Page"] != "example.com/app.Page" {
+		t.Fatalf("Page model = %q", page.Models["Page"])
+	}
+	if page.Funcs["firstUser"] != "FirstUser" {
+		t.Fatalf("firstUser func = %q", page.Funcs["firstUser"])
+	}
+	row := idx.Templates["templates/page.gohtml#table_row"]
+	if row.Dot != "example.com/app.User" {
+		t.Fatalf("row dot = %q", row.Dot)
+	}
+}
+
 func TestBuildIndexScansNamedDefineContracts(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
@@ -233,6 +274,14 @@ func Lookup() (Page, error) {
 	if page.Fields["GeneratedAt"].Type != "time.Time" {
 		t.Fatalf("GeneratedAt type = %q, want time.Time", page.Fields["GeneratedAt"].Type)
 	}
+	timeType := idx.Types["time.Time"]
+	format, ok := timeType.Methods["Format"]
+	if !ok {
+		t.Fatalf("time.Time methods = %#v, want Format method for imported named type", timeType.Methods)
+	}
+	if len(format.Params) != 1 || format.Params[0] != "string" {
+		t.Fatalf("time.Time.Format params = %#v, want string", format.Params)
+	}
 	if page.Fields["Names"].Type != "Box[string]" {
 		t.Fatalf("Names type = %q, want Box[string]", page.Fields["Names"].Type)
 	}
@@ -307,6 +356,149 @@ type Secret struct {
 	}
 	if _, ok := idx.Types["example.com/app/internal/secret.Secret"]; ok {
 		t.Fatal("configured excluded type should be excluded")
+	}
+}
+
+func TestBuildTemplateIndexHonorsDisabledConfig(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "enabled": false,
+  "functions": {
+    "asset": "example.com/app.Asset"
+  }
+}`)
+	writeFile(t, root, "page.go", `package app
+
+type Page struct {
+	Title string
+}
+
+func Asset(path string) string {
+	return path
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@model Page example.com/app.Page
+*/}}
+{{ Page.Title }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if needed {
+		t.Fatal("disabled config should not require an index")
+	}
+	if len(idx.Templates) != 0 || len(idx.Types) != 0 || len(idx.Funcs) != 0 {
+		t.Fatalf("disabled config should not scan project, got templates=%d types=%d funcs=%d", len(idx.Templates), len(idx.Types), len(idx.Funcs))
+	}
+}
+
+func TestBuildIndexUsesConfigDefaultFunctions(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "functions": {
+    "asset": "example.com/app.Asset"
+  }
+}`)
+	writeFile(t, root, "page.go", `package app
+
+type Page struct {
+	Title string
+}
+
+func Asset(path string) string {
+	return "/assets/" + path
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@model page Page
+*/}}
+<link rel="stylesheet" href="{{ asset "app.css" }}">
+{{ page.Title }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["asset"]; got != "example.com/app.Asset" {
+		t.Fatalf("default asset func = %q", got)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexLetsLocalFunctionOverrideConfigDefault(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "functions": {
+    "format": "example.com/app.GlobalFormat"
+  }
+}`)
+	writeFile(t, root, "format.go", `package app
+
+type Page struct {
+	Title string
+}
+
+func GlobalFormat(value string) string {
+	return value
+}
+
+func LocalFormat(value string) string {
+	return value
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@model page Page
+@func format example.com/app.LocalFormat
+*/}}
+{{ format page.Title }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["format"]; got != "example.com/app.LocalFormat" {
+		t.Fatalf("local format func = %q", got)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildTemplateIndexUsesConfigFunctionWithoutModelContract(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "functions": {
+    "asset": "example.com/app.Asset"
+  }
+}`)
+	writeFile(t, root, "assets.go", `package app
+
+func Asset(path string) string {
+	return "/assets/" + path
+}
+`)
+	writeFile(t, root, "templates/layout.gohtml", `<script src="{{ asset "app.js" }}"></script>`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed when config declares default functions")
+	}
+	tmpl := idx.Templates["templates/layout.gohtml"]
+	if got := tmpl.Funcs["asset"]; got != "example.com/app.Asset" {
+		t.Fatalf("default asset func = %q", got)
 	}
 }
 

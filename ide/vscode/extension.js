@@ -2,6 +2,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
+const os = require("os");
 
 const output = vscode.window.createOutputChannel("go-doc");
 
@@ -11,6 +12,8 @@ let installPromptOpen = false;
 let extensionContext = null;
 let goDocCommand = null;
 let languageClientModule = null;
+let activeLspCommand = null;
+let activeLspVersion = "-";
 
 async function activate(context) {
   extensionContext = context;
@@ -26,6 +29,7 @@ async function activate(context) {
     vscode.workspace.onDidSaveTextDocument((document) => scheduleRebuild(document.uri.fsPath)),
     vscode.commands.registerCommand("goDoc.rebuildIndex", rebuildCurrentWorkspace),
     vscode.commands.registerCommand("goDoc.showIndexStatus", showIndexStatus),
+    vscode.commands.registerCommand("goDoc.toggleEnabled", toggleEnabled),
     vscode.commands.registerCommand("goDoc.toggleAutoIndex", toggleAutoIndex),
     vscode.commands.registerCommand("goDoc.restartLsp", restartLsp),
   );
@@ -44,15 +48,22 @@ async function startClient(context) {
     output.appendLine("No workspace folder found; go-doc LSP not started");
     return;
   }
+  if (!goDocEnabled(root)) {
+    output.appendLine("go-doc disabled for this workspace");
+    return;
+  }
 
   const command = await ensureGoDoc(root, false);
   if (!command) {
     output.appendLine("go-doc CLI is not available; LSP not started");
     return;
   }
+  const lspCommand = prepareLspCommand(command);
 
   await stopClient();
-  output.appendLine(`Starting go-doc LSP: ${command} lsp ${root}`);
+  activeLspCommand = lspCommand;
+  activeLspVersion = await commandVersion(lspCommand, root);
+  output.appendLine(`Starting go-doc LSP: ${lspCommand} lsp ${root} (${activeLspVersion})`);
 
   const lsp = loadLanguageClient();
   if (!lsp) return;
@@ -61,7 +72,7 @@ async function startClient(context) {
     "go-doc",
     "go-doc",
     {
-      command,
+      command: lspCommand,
       args: ["lsp", root],
       options: { cwd: root },
     },
@@ -96,6 +107,8 @@ async function stopClient() {
   if (!client) return;
   const current = client;
   client = null;
+  activeLspCommand = null;
+  activeLspVersion = "-";
   try {
     await current.stop();
   } catch (err) {
@@ -124,13 +137,37 @@ function workspaceRoot() {
 }
 
 function scheduleRebuild(filePath) {
-  if (!vscode.workspace.getConfiguration("goDoc").get("autoIndex", true)) return;
   if (ignoredPath(filePath)) return;
   const root = findModuleRoot(filePath);
   if (!root) return;
+  if (!autoIndexEnabled(root)) return;
   clearTimeout(rebuildTimer);
   const delay = vscode.workspace.getConfiguration("goDoc").get("debounceMilliseconds", 1200);
   rebuildTimer = setTimeout(() => rebuildIndex(root, false), delay);
+}
+
+function autoIndexEnabled(root) {
+  if (vscode.workspace.getConfiguration("goDoc").get("autoIndex", false)) return true;
+  const config = projectConfig(root);
+  return config && config.index === true;
+}
+
+function goDocEnabled(root) {
+  if (!vscode.workspace.getConfiguration("goDoc").get("enabled", true)) return false;
+  const config = projectConfig(root);
+  return !config || config.enabled !== false;
+}
+
+function projectConfig(root) {
+  try {
+    const configPath = path.join(root, ".go-doc", "config.json");
+    if (!fs.existsSync(configPath)) return null;
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    return config || null;
+  } catch (err) {
+    output.appendLine(`go-doc config read failed: ${err.message}`);
+    return null;
+  }
 }
 
 async function rebuildCurrentWorkspace() {
@@ -218,9 +255,9 @@ async function offerInstall(root, notify) {
 }
 
 async function resolveGoDoc(root) {
-  const candidates = ["go-doc"];
   const envCandidates = await goDocCandidatesFromGoEnv(root);
-  candidates.push(...envCandidates);
+  const pathCandidate = await firstGoDocPath(root);
+  const candidates = [...envCandidates, pathCandidate, "go-doc"];
 
   for (const candidate of unique(candidates.filter(Boolean))) {
     const probe = await execFile(candidate, ["--help"], root);
@@ -249,7 +286,38 @@ async function goDocCandidatesFromGoEnv(root) {
 
 function defaultGoDocBin() {
   const exe = process.platform === "win32" ? "go-doc.exe" : "go-doc";
-  return path.join(require("os").homedir(), "go", "bin", exe);
+  return path.join(os.homedir(), "go", "bin", exe);
+}
+
+function prepareLspCommand(command) {
+  if (process.platform !== "win32" || !path.isAbsolute(command) || !fs.existsSync(command)) {
+    return command;
+  }
+
+  try {
+    const dir = extensionContext?.globalStorageUri?.fsPath || path.join(os.tmpdir(), "go-doc-vscode");
+    fs.mkdirSync(dir, { recursive: true });
+    cleanupOldLspCopies(dir);
+    const copy = path.join(dir, `go-doc-lsp-${process.pid}-${Date.now()}.exe`);
+    fs.copyFileSync(command, copy);
+    output.appendLine(`Copied go-doc LSP binary to ${copy}`);
+    return copy;
+  } catch (err) {
+    output.appendLine(`go-doc LSP binary copy failed, using installed binary: ${err.message}`);
+    return command;
+  }
+}
+
+function cleanupOldLspCopies(dir) {
+  try {
+    for (const entry of fs.readdirSync(dir)) {
+      if (/^go-doc-lsp-\d+-\d+\.exe$/.test(entry)) {
+        fs.rmSync(path.join(dir, entry), { force: true });
+      }
+    }
+  } catch (err) {
+    output.appendLine(`go-doc LSP copy cleanup skipped: ${err.message}`);
+  }
 }
 
 function unique(values) {
@@ -286,6 +354,7 @@ async function showIndexStatus() {
   const indexFile = root ? path.join(root, ".go-doc", "index.json") : null;
   const exists = indexFile && fs.existsSync(indexFile);
   const goDocPath = root ? (goDocCommand || await resolveGoDoc(root) || "-") : "-";
+  const installedVersion = root && goDocPath !== "-" ? await commandVersion(goDocPath, root) : "-";
   let templates = 0;
   let types = 0;
   let error = "-";
@@ -302,13 +371,16 @@ async function showIndexStatus() {
 
   vscode.window.showInformationMessage(
     [
-      `Source: ${exists ? indexFile : "no .go-doc/index.json found"}`,
+      `Optional index: ${exists ? indexFile : "no optional .go-doc/index.json file"}`,
       `Index root: ${root || "-"}`,
       `Project: ${vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "-"}`,
       `File: ${filePath || "-"}`,
       `Language: ${languageId || "-"}`,
       `Client: ${client ? stateName(client.state) : "not created"}`,
       `go-doc: ${goDocPath}`,
+      `Installed version: ${installedVersion}`,
+      `LSP executable: ${activeLspCommand || "-"}`,
+      `LSP version: ${activeLspVersion}`,
       `Templates: ${templates}`,
       `Types: ${types}`,
       `Error: ${error}`,
@@ -319,9 +391,21 @@ async function showIndexStatus() {
 
 async function toggleAutoIndex() {
   const config = vscode.workspace.getConfiguration("goDoc");
-  const next = !config.get("autoIndex", true);
+  const next = !config.get("autoIndex", false);
   await config.update("autoIndex", next, vscode.ConfigurationTarget.Workspace);
   vscode.window.showInformationMessage(`go-doc auto index ${next ? "enabled" : "disabled"}`);
+}
+
+async function toggleEnabled() {
+  const config = vscode.workspace.getConfiguration("goDoc");
+  const next = !config.get("enabled", true);
+  await config.update("enabled", next, vscode.ConfigurationTarget.Workspace);
+  vscode.window.showInformationMessage(`go-doc ${next ? "enabled" : "disabled"} for this workspace`);
+  if (next) {
+    await startClient(extensionContext || { subscriptions: [] });
+    return;
+  }
+  await stopClient();
 }
 
 async function restartLsp() {
@@ -349,6 +433,18 @@ async function findGoDocPath(root) {
   const command = process.platform === "win32" ? "where" : "which";
   const result = await execFile(command, ["go-doc"], root);
   return (result.stdout || result.stderr || result.err?.message || "-").trim();
+}
+
+async function firstGoDocPath(root) {
+  const output = await findGoDocPath(root);
+  const first = output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  return first && first !== "-" ? first : null;
+}
+
+async function commandVersion(command, root) {
+  const result = await execFile(command, ["version"], root);
+  if (result.err) return "-";
+  return (result.stdout || result.stderr || "-").trim() || "-";
 }
 
 module.exports = { activate, deactivate };

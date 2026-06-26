@@ -38,14 +38,13 @@ object GoDocIndexWatcher {
     }
 
     private fun schedule(project: Project, root: File, alarm: Alarm) {
-        if (!GoDocSettings.getInstance(project).state.autoIndex) return
+        if (!GoDocIndexer.enabled(project, root)) return
 
         alarm.cancelAllRequests()
         alarm.addRequest(
             {
-                val outDir = File(root, ".go-doc")
-                val outFile = File(outDir, "index.json")
-                outDir.mkdirs()
+                val outFile = GoDocIndexer.indexTarget(project, root)
+                outFile.parentFile.mkdirs()
 
                 val result = GoDocIndexer.run(root, outFile)
                 if (result.exitCode != 0) {

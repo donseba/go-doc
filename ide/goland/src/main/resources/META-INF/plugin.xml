@@ -21,14 +21,20 @@
     <actions>
         <action id="GoDoc.RebuildIndex"
                 class="com.donseba.godoc.RebuildIndexAction"
-                text="Rebuild go-doc Index"
-                description="Regenerate .go-doc/index.json for this project">
+                text="Write go-doc Index"
+                description="Write the optional .go-doc/index.json artifact for this project">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
         <action id="GoDoc.ShowIndexStatus"
                 class="com.donseba.godoc.ShowIndexStatusAction"
-                text="Show go-doc Index Status"
-                description="Show which generated go-doc index this project is using">
+                text="Show go-doc Status"
+                description="Show go-doc language server and optional index status">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        <action id="GoDoc.ToggleEnabled"
+                class="com.donseba.godoc.ToggleEnabledAction"
+                text="go-doc Enabled"
+                description="Enable or disable go-doc for this project">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
         <action id="GoDoc.ToggleAutoIndex"

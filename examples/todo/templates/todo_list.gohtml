@@ -5,6 +5,7 @@
 <section aria-labelledby="todo-list-title">
     <h2 id="todo-list-title">Todos</h2>
     <p>{{ len Page.Todos }} tasks for {{ Page.Owner.Name }}.</p>
+    <p>Projected review minutes: {{ mul (len Page.Todos) 5 }}.</p>
 
     <ul>
         {{ range Page.Todos }}
@@ -17,7 +18,7 @@
         {{ end }}
     </ul>
 
-    <p>Rendered at {{ Page.GeneratedAt.Format "15:04:05" }}.</p>
+    <p>Rendered at {{ Page.GeneratedAt.In.In "15:04:05" }}.</p>
 
     <h3>Todos from a User method</h3>
     <ul>

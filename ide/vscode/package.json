@@ -2,7 +2,7 @@
   "name": "go-doc-vscode",
   "displayName": "go-doc",
   "description": "Template contract completion and diagnostics for Go template files.",
-  "version": "0.8.28",
+  "version": "0.9.2",
   "publisher": "donseba",
   "author": {
     "name": "Sebastiano Bellinzis",
@@ -41,6 +41,7 @@
     "workspaceContains:**/*.tmpl",
     "onCommand:goDoc.rebuildIndex",
     "onCommand:goDoc.showIndexStatus",
+    "onCommand:goDoc.toggleEnabled",
     "onCommand:goDoc.toggleAutoIndex",
     "onCommand:goDoc.restartLsp"
   ],
@@ -68,6 +69,10 @@
       {
         "command": "goDoc.showIndexStatus",
         "title": "go-doc: Show Index Status"
+      },
+      {
+        "command": "goDoc.toggleEnabled",
+        "title": "go-doc: Toggle Enabled"
       },
       {
         "command": "goDoc.toggleAutoIndex",
@@ -105,10 +110,15 @@
     "configuration": {
       "title": "go-doc",
       "properties": {
-        "goDoc.autoIndex": {
+        "goDoc.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically rebuild .go-doc/index.json after Go or template files change."
+          "description": "Enable go-doc for this workspace. A project can also opt out with .go-doc/config.json: { \"enabled\": false }."
+        },
+        "goDoc.autoIndex": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically rebuild .go-doc/index.json after Go or template files change. Disabled by default because the language server can index in memory. A project can also opt in with .go-doc/config.json: { \"index\": true }."
         },
         "goDoc.debounceMilliseconds": {
           "type": "number",

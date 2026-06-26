@@ -8,7 +8,6 @@ Thumbs.db
 build/
 out/
 dist/
-docs/
 !examples/docs/
 !examples/docs/**
 tmp/
@@ -38,6 +37,7 @@ ide/sublime/*.sublime-package
 !examples/standalone/.go-doc/
 !examples/standalone/.go-doc/index.json
 !examples/todo/.go-doc/
+!examples/todo/.go-doc/config.json
 !examples/todo/.go-doc/index.json
 !examples/showcase/.go-doc/
 !examples/showcase/.go-doc/index.json

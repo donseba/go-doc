@@ -43,6 +43,7 @@ func newApp() *app {
 	contractRenderer, err := renderer.New(renderer.Config{
 		Mode:  renderer.Development,
 		Files: templateFiles,
+		Funcs: FuncMap,
 	})
 	if err != nil {
 		panic(err)
@@ -151,7 +152,6 @@ func (app *app) toggleTodo(w http.ResponseWriter, r *http.Request, id int) {
 
 func (app *app) render(w http.ResponseWriter, page TodoPage) {
 	tmpl := template.New("main.gohtml")
-	tmpl.Funcs(FuncMap)
 	if err := app.renderer.Register(tmpl, page, page.Selected, page.Owner); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

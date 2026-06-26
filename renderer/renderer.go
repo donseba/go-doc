@@ -34,6 +34,7 @@ const (
 type Config struct {
 	Mode  Mode
 	Files []string
+	Funcs template.FuncMap
 }
 
 // Renderer registers go-doc model accessors for one template set.
@@ -43,6 +44,7 @@ type Config struct {
 type Renderer struct {
 	mode      Mode
 	files     []string
+	funcs     template.FuncMap
 	contracts Contracts
 }
 
@@ -91,7 +93,7 @@ func New(config Config) (Renderer, error) {
 		mode = Production
 	}
 	files := slices.Clone(config.Files)
-	r := Renderer{mode: mode, files: files}
+	r := Renderer{mode: mode, files: files, funcs: maps.Clone(config.Funcs)}
 
 	switch mode {
 	case Development:
@@ -110,6 +112,9 @@ func New(config Config) (Renderer, error) {
 
 // Register installs model accessors on tmpl using the configured mode.
 func (r Renderer) Register(tmpl *template.Template, values ...any) error {
+	if err := UseFuncs(tmpl, r.funcs); err != nil {
+		return err
+	}
 	switch r.mode {
 	case Development:
 		return RegisterFromFiles(tmpl, values, r.files...)
@@ -118,6 +123,27 @@ func (r Renderer) Register(tmpl *template.Template, values ...any) error {
 	default:
 		return fmt.Errorf("register models: unknown renderer mode %q", r.mode)
 	}
+}
+
+// UseFuncs installs application-wide template functions on tmpl.
+//
+// It is a small wrapper around html/template.Funcs that returns panics as
+// errors, matching the rest of the renderer API. Call it before parsing
+// templates. Renderer.Register calls it automatically for Config.Funcs.
+func UseFuncs(tmpl *template.Template, funcs template.FuncMap) (err error) {
+	if tmpl == nil {
+		return fmt.Errorf("register functions: nil template")
+	}
+	if len(funcs) == 0 {
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("register functions: %v", recovered)
+		}
+	}()
+	tmpl.Funcs(funcs)
+	return nil
 }
 
 // Register installs model accessors on an existing template.
@@ -321,7 +347,7 @@ func ScanContracts(files ...string) (map[string]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("register models: read %s: %w", file, err)
 		}
-		for _, match := range modelPattern.FindAllStringSubmatch(string(data), -1) {
+		for _, match := range modelPattern.FindAllStringSubmatch(contractScanText(string(data)), -1) {
 			name := strings.TrimSpace(match[1])
 			typeName := normalizeType(match[2])
 			if previous, exists := contracts[name]; exists && previous != typeName {
@@ -331,6 +357,26 @@ func ScanContracts(files ...string) (map[string]string, error) {
 		}
 	}
 	return contracts, nil
+}
+
+func contractScanText(src string) string {
+	matches := templateCommentPattern.FindAllStringSubmatch(src, -1)
+	if len(matches) == 0 {
+		return src
+	}
+	var out strings.Builder
+	for _, match := range matches {
+		body := strings.TrimSpace(match[1])
+		if body == "" {
+			continue
+		}
+		out.WriteString(body)
+		out.WriteByte('\n')
+	}
+	if out.Len() == 0 {
+		return src
+	}
+	return out.String()
 }
 
 func valueTypeName(value any) (string, bool) {
@@ -415,4 +461,7 @@ var reservedTemplateNames = map[string]bool{
 	"with":     true,
 }
 
-var modelPattern = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+var (
+	modelPattern           = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+	templateCommentPattern = regexp.MustCompile(`(?s)\{\{/\*(.*?)\*/\}\}`)
+)

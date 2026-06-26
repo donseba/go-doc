@@ -118,6 +118,81 @@ func TestRendererDevelopmentModeScansOnRegister(t *testing.T) {
 	}
 }
 
+func TestRendererRegisterInstallsDefaultFuncs(t *testing.T) {
+	root := t.TempDir()
+	file := writeTemplate(t, root, "page.gohtml", `{{/*
+@model Page github.com/donseba/go-doc/renderer.testPage
+*/}}
+{{ upper Page.Title }}`)
+
+	r, err := New(Config{
+		Mode:  Development,
+		Files: []string{file},
+		Funcs: template.FuncMap{
+			"upper": strings.ToUpper,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tmpl := template.New("page.gohtml")
+	if err := r.Register(tmpl, testPage{Title: "default funcs"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmpl.ParseFiles(file); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&out, "page.gohtml", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "DEFAULT FUNCS") {
+		t.Fatalf("output = %q, want default func output", out.String())
+	}
+}
+
+func TestRendererDefaultFuncsAreCloned(t *testing.T) {
+	root := t.TempDir()
+	file := writeTemplate(t, root, "page.gohtml", `{{/*
+@model Page github.com/donseba/go-doc/renderer.testPage
+*/}}
+{{ suffix Page.Title }}`)
+	funcs := template.FuncMap{
+		"suffix": func(value string) string { return value + "-original" },
+	}
+
+	r, err := New(Config{Mode: Development, Files: []string{file}, Funcs: funcs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	funcs["suffix"] = func(value string) string { return value + "-changed" }
+
+	tmpl := template.New("page.gohtml")
+	if err := r.Register(tmpl, testPage{Title: "value"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmpl.ParseFiles(file); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&out, "page.gohtml", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "value-original") {
+		t.Fatalf("output = %q, want cloned default funcs", out.String())
+	}
+}
+
+func TestUseFuncsRejectsInvalidFuncMap(t *testing.T) {
+	err := UseFuncs(template.New("page"), template.FuncMap{"bad-name": func() string { return "" }})
+	if err == nil || !strings.Contains(err.Error(), "function name") {
+		t.Fatalf("err = %v, want function name error", err)
+	}
+}
+
 func TestRendererProductionModeUsesStartupContracts(t *testing.T) {
 	root := t.TempDir()
 	file := writeTemplate(t, root, "page.gohtml", `{{/*
@@ -332,6 +407,28 @@ func TestRegisterFromFilesMatchesPointerValues(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Pointer") {
 		t.Fatalf("output = %q, want pointer model value", out.String())
+	}
+}
+
+func TestRegisterFromFilesScansOneLineTemplateComment(t *testing.T) {
+	root := t.TempDir()
+	file := writeTemplate(t, root, "page.gohtml", `{{/* @model Page github.com/donseba/go-doc/renderer.testPage */}}
+{{ Page.Title }}`)
+
+	tmpl := template.New("page.gohtml")
+	if err := RegisterFromFiles(tmpl, []any{testPage{Title: "One line"}}, file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmpl.ParseFiles(file); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&out, "page.gohtml", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "One line") {
+		t.Fatalf("output = %q, want one-line contract model value", out.String())
 	}
 }
 

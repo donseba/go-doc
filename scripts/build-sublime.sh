@@ -6,9 +6,9 @@ DIST="${ROOT}/dist"
 SOURCE="${ROOT}/ide/sublime"
 
 mkdir -p "${DIST}"
-rm -f "${DIST}/LSP-go-doc.sublime-package"
+rm -f "${DIST}/go-doc-sublime.sublime-package" "${DIST}/LSP-go-doc.sublime-package"
 
 (
   cd "${SOURCE}"
-  zip -qr "${DIST}/LSP-go-doc.sublime-package" .
+  zip -qr "${DIST}/go-doc-sublime.sublime-package" .
 )

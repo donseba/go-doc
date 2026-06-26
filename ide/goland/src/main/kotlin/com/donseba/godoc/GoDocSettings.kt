@@ -19,7 +19,8 @@ class GoDocSettings : PersistentStateComponent<GoDocSettings.SettingsState> {
     }
 
     data class SettingsState(
-        var autoIndex: Boolean = true,
+        var enabled: Boolean = true,
+        var autoIndex: Boolean = false,
     )
 
     companion object {

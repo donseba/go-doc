@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -261,6 +262,7 @@ var (
 	lspActionPattern               = regexp.MustCompile(`\{\{[^}]*\}\}`)
 	lspAccessorPattern             = regexp.MustCompile(`(?:[$_A-Za-z][$_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)+|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)`)
 	lspTemplateCallRegexp          = regexp.MustCompile(`^\s*(?:template|block)\s+"([^"]+)"(?:\s+(.+?))?\s*-?\s*$`)
+	lspDefineActionRegexp          = regexp.MustCompile(`^\s*define\s+"([^"]+)"\s*$`)
 	lspLeadingDefineContractRegexp = regexp.MustCompile(`(?s)(\{\{/\*.*?@(model|dot|func).*?\*/\}\})([ \t\r\n]*)(\{\{\s*(?:-)?\s*define\s+"([^"]+)"\s*(?:-)?\s*\}\})`)
 	lspContractTypeRegexp          = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
 	lspModelPrefixRegexp           = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z0-9_./-]*$`)
@@ -367,7 +369,7 @@ func (s *lspServer) handleRequest(msg rpcMessage) (any, *rpcError) {
 					"full": true,
 				},
 			},
-			"serverInfo": map[string]string{"name": "go-doc", "version": "0.1.0"},
+			"serverInfo": map[string]string{"name": "go-doc", "version": Version},
 		}, nil
 	case "shutdown":
 		return nil, nil
@@ -455,6 +457,9 @@ func (s *lspServer) handleNotification(msg rpcMessage) error {
 				current = applyTextChange(current, change.Range, change.Text)
 			}
 			s.docs[params.TextDocument.URI] = current
+		}
+		if err := s.clearDiagnostics(params.TextDocument.URI); err != nil {
+			return err
 		}
 		if err := s.publishDiagnostics(params.TextDocument.URI); err != nil {
 			return err
@@ -663,22 +668,31 @@ func applyTextChange(current string, rng *lspRange, replacement string) string {
 }
 
 func loadOrBuildIndex(root string) (indexFile, string, time.Time, error) {
+	cfg := loadIndexConfig(root)
+	if !cfg.enabled() {
+		return indexFile{Version: 2, Templates: map[string]templateIndex{}, Types: map[string]goTypeIndex{}, Funcs: map[string]goFuncIndex{}, Short: map[string][]string{}}, "", time.Time{}, nil
+	}
 	path := filepath.Join(root, ".go-doc", "index.json")
-	data, err := os.ReadFile(path)
-	if err == nil {
-		var idx indexFile
-		if err := json.Unmarshal(data, &idx); err != nil {
+	if cfg.WriteIndex {
+		data, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return indexFile{}, path, time.Time{}, err
 		}
-		stat, _ := os.Stat(path)
-		var mtime time.Time
-		if stat != nil {
-			mtime = stat.ModTime()
+		if err == nil {
+			var idx indexFile
+			if err := json.Unmarshal(data, &idx); err != nil {
+				return indexFile{}, path, time.Time{}, err
+			}
+			stat, _ := os.Stat(path)
+			var mtime time.Time
+			if stat != nil {
+				mtime = stat.ModTime()
+			}
+			return idx, path, mtime, nil
 		}
-		return idx, path, mtime, nil
 	}
 	idx, _, err := buildTemplateIndex(root)
-	return idx, path, time.Time{}, err
+	return idx, "", time.Time{}, err
 }
 
 func (s *lspServer) refreshWorkspaceState() {
@@ -690,6 +704,9 @@ func (s *lspServer) refreshWorkspaceState() {
 }
 
 func (s *lspServer) refreshIndex() bool {
+	if s.indexPath == "" {
+		return false
+	}
 	stat, err := os.Stat(s.indexPath)
 	if err != nil {
 		return false
@@ -746,9 +763,9 @@ func (s *lspServer) indexForURI(uri string) lspIndex {
 	if err != nil {
 		return s.index()
 	}
-	root := nearestIndexRoot(path)
+	root := nearestModuleRoot(path)
 	if root == "" {
-		root = nearestModuleRoot(path)
+		root = nearestIndexRoot(path)
 	}
 	if root == "" {
 		return s.index()
@@ -768,10 +785,14 @@ func (s *lspServer) loadIndexForRoot(root string) (lspIndex, bool) {
 	if err != nil {
 		return lspIndex{}, false
 	}
+	cfg := loadIndexConfig(root)
+	if !cfg.enabled() {
+		return lspIndex{indexFile: indexFile{Version: 2, Templates: map[string]templateIndex{}, Types: map[string]goTypeIndex{}, Funcs: map[string]goFuncIndex{}, Short: map[string][]string{}}, rootPath: root}, true
+	}
 	indexPath := filepath.Join(root, ".go-doc", "index.json")
 	sourceMTime := latestSourceModTime(root)
 	stat, statErr := os.Stat(indexPath)
-	if statErr == nil {
+	if cfg.WriteIndex && statErr == nil {
 		if cached, ok := s.indexes[root]; ok &&
 			cached.path == indexPath &&
 			!stat.ModTime().After(cached.mtime) &&
@@ -906,6 +927,10 @@ func (s *lspServer) documentText(uri string) (string, bool) {
 }
 
 func (s *lspServer) contractForURI(uri string, idx lspIndex) (templateIndex, bool) {
+	return s.contractForURIAt(uri, idx, -1)
+}
+
+func (s *lspServer) contractForURIAt(uri string, idx lspIndex, offset int) (templateIndex, bool) {
 	path, err := pathFromURI(uri)
 	if err != nil {
 		return templateIndex{}, false
@@ -913,18 +938,74 @@ func (s *lspServer) contractForURI(uri string, idx lspIndex) (templateIndex, boo
 	relative := rel(idx.rootPath, path)
 	text, _ := s.documentText(uri)
 	if contract, ok := idx.Templates[relative]; ok {
-		return mergeInlineContract(text, idx, contract), true
+		contract = mergeInlineContract(text, idx, contract)
+		return activeContractAt(text, idx, relative, contract, offset), true
 	}
 	for key, contract := range idx.Templates {
 		if strings.HasSuffix(relative, key) {
-			return mergeInlineContract(text, idx, contract), true
+			contract = mergeInlineContract(text, idx, contract)
+			return activeContractAt(text, idx, relative, contract, offset), true
 		}
 	}
 	contract := mergeInlineContract(text, idx, templateIndex{})
+	contract = activeContractAt(text, idx, relative, contract, offset)
 	return contract, len(contract.Models) > 0 || contract.Dot != "" || len(contract.Funcs) > 0
 }
 
+func activeContractAt(text string, idx lspIndex, relative string, base templateIndex, offset int) templateIndex {
+	if offset < 0 {
+		return base
+	}
+	name := activeDefineNameAt(text, offset)
+	if name == "" {
+		return base
+	}
+	if contract, ok := templateContractForDefine(idx, relative, name); ok {
+		return mergeInlineContract(text, idx, contract)
+	}
+	return base
+}
+
+func templateContractForDefine(idx lspIndex, relative, name string) (templateIndex, bool) {
+	normalized := filepath.ToSlash(relative)
+	for _, contract := range idx.Templates {
+		if contract.Name == name && filepath.ToSlash(contract.Source) == normalized {
+			return contract, true
+		}
+	}
+	contract, _, ok := templateContractByName(idx, name)
+	return contract, ok
+}
+
+func activeDefineNameAt(text string, offset int) string {
+	offset = max(0, min(offset, len(text)))
+	var stack []string
+	for _, action := range lspActionPattern.FindAllStringIndex(text[:offset], -1) {
+		actionText := text[action[0]:action[1]]
+		if isTemplateCommentAction(actionText) {
+			continue
+		}
+		content, _, ok := actionContent(actionText)
+		if !ok {
+			continue
+		}
+		content = strings.TrimSpace(content)
+		if match := lspDefineActionRegexp.FindStringSubmatch(content); len(match) == 2 {
+			stack = append(stack, match[1])
+			continue
+		}
+		if content == "end" && len(stack) > 0 {
+			stack = stack[:len(stack)-1]
+		}
+	}
+	if len(stack) == 0 {
+		return ""
+	}
+	return stack[len(stack)-1]
+}
+
 func mergeInlineContract(text string, idx lspIndex, base templateIndex) templateIndex {
+	text = contractScanText(contractAnnotationText(text, base))
 	inlineMatches := modelPattern.FindAllStringSubmatch(text, -1)
 	models := make(map[string]string, len(base.Models)+len(inlineMatches))
 	funcs := make(map[string]string, len(base.Funcs))
@@ -957,6 +1038,93 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 	return templateIndex{Models: models, Dot: dot, Funcs: funcs}
 }
 
+func contractAnnotationText(text string, base templateIndex) string {
+	if base.Name != "" {
+		if body, ok := defineBodyText(text, base.Name); ok {
+			return body
+		}
+		return text
+	}
+	return topLevelTemplateText(text)
+}
+
+func topLevelTemplateText(text string) string {
+	var out strings.Builder
+	cursor := 0
+	for _, block := range defineBlockRanges(text) {
+		if block[0] > cursor {
+			out.WriteString(text[cursor:block[0]])
+		}
+		cursor = max(cursor, block[1])
+	}
+	if cursor < len(text) {
+		out.WriteString(text[cursor:])
+	}
+	return out.String()
+}
+
+func defineBodyText(text, name string) (string, bool) {
+	for _, block := range defineBlocks(text) {
+		if block.name == name {
+			return text[block.bodyStart:block.bodyEnd], true
+		}
+	}
+	return "", false
+}
+
+type defineBlock struct {
+	name               string
+	start, end         int
+	bodyStart, bodyEnd int
+}
+
+func defineBlockRanges(text string) [][2]int {
+	blocks := defineBlocks(text)
+	ranges := make([][2]int, 0, len(blocks))
+	for _, block := range blocks {
+		ranges = append(ranges, [2]int{block.start, block.end})
+	}
+	return ranges
+}
+
+func defineBlocks(text string) []defineBlock {
+	type openDefine struct {
+		name      string
+		start     int
+		bodyStart int
+	}
+	var stack []openDefine
+	var blocks []defineBlock
+	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
+		actionText := text[action[0]:action[1]]
+		if isTemplateCommentAction(actionText) {
+			continue
+		}
+		content, _, ok := actionContent(actionText)
+		if !ok {
+			continue
+		}
+		content = strings.TrimSpace(content)
+		if match := lspDefineActionRegexp.FindStringSubmatch(content); len(match) == 2 {
+			stack = append(stack, openDefine{name: match[1], start: action[0], bodyStart: action[1]})
+			continue
+		}
+		if content == "end" && len(stack) > 0 {
+			open := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			blocks = append(blocks, defineBlock{
+				name:      open.name,
+				start:     open.start,
+				end:       action[1],
+				bodyStart: open.bodyStart,
+				bodyEnd:   action[0],
+			})
+		}
+	}
+	sort.Slice(blocks, func(i, j int) bool { return blocks[i].start < blocks[j].start })
+	return blocks
+}
+
 func (s *lspServer) publishDiagnostics(uri string) error {
 	text, ok := s.documentText(uri)
 	if !ok {
@@ -967,13 +1135,22 @@ func (s *lspServer) publishDiagnostics(uri string) error {
 	if !ok {
 		return s.clearDiagnostics(uri)
 	}
-	items := diagnosticsForText(text, idx, contract)
+	relative := ""
+	if path, err := pathFromURI(uri); err == nil {
+		relative = rel(idx.rootPath, path)
+	}
+	items := diagnosticsForTextScoped(text, idx, contract, relative)
 	return writeRPCNotification(s.out, "textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": items})
 }
 
 func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []diagnostic {
+	return diagnosticsForTextScoped(text, idx, contract, "")
+}
+
+func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex, relative string) []diagnostic {
 	var items []diagnostic
 	items = append(items, leadingDefineContractDiagnostics(text)...)
+	items = append(items, modelFunctionCollisionDiagnostics(text, contract)...)
 	for _, match := range lspContractTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
 		start, end := match[2], match[3]
 		raw := text[start:end]
@@ -1023,9 +1200,10 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 		if text[match[2]:match[3]] != "range" {
 			continue
 		}
+		actionContract := activeContractAt(text, idx, relative, contract, match[0])
 		expression := strings.TrimSpace(text[match[4]:match[5]])
 		source := sourceExpression(expression)
-		sourceType := resolveExpressionValueType(idx, contract, source, "")
+		sourceType := resolveExpressionValueType(idx, actionContract, source, "")
 		if sourceType != "" && !isRangeable(sourceType) {
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, match[4], match[5]),
@@ -1040,19 +1218,27 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 		if isTemplateCommentAction(actionText) {
 			continue
 		}
-		if item, ok := lenDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+		actionContract := activeContractAt(text, idx, relative, contract, action[0])
+		currentScope := scopeAt(text, action[0], idx, actionContract)
+		if item, ok := lenDiagnosticForAction(text, action[0], actionText, idx, actionContract, currentScope.dotType); ok {
 			items = append(items, item)
 		}
-		if item, ok := functionReturnDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+		if item, ok := functionReturnDiagnosticForAction(text, action[0], actionText, idx, actionContract); ok {
 			items = append(items, item)
 		}
-		if item, ok := functionArgumentDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+		if item, ok := functionArgumentDiagnosticForAction(text, action[0], actionText, idx, actionContract, currentScope.dotType); ok {
 			items = append(items, item)
 		}
-		if item, ok := pipelineFunctionDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+		if item, ok := nestedFunctionArgumentDiagnosticForAction(text, action[0], actionText, idx, actionContract, currentScope.dotType); ok {
 			items = append(items, item)
 		}
-		if item, ok := templateIncludeDiagnosticForAction(text, action[0], actionText, idx, contract); ok {
+		if item, ok := methodArgumentDiagnosticForAction(text, action[0], actionText, idx, actionContract, currentScope.dotType); ok {
+			items = append(items, item)
+		}
+		if item, ok := pipelineFunctionDiagnosticForAction(text, action[0], actionText, idx, actionContract, currentScope.dotType); ok {
+			items = append(items, item)
+		}
+		if item, ok := templateIncludeDiagnosticForAction(text, action[0], actionText, idx, relative, actionContract); ok {
 			items = append(items, item)
 		}
 		for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
@@ -1063,18 +1249,7 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 			end := action[0] + match[1]
 			token := actionText[match[0]:match[1]]
 			root := tokenRoot(token)
-			if root == "_" && len(contract.Models) > 0 {
-				parts := strings.FieldsFunc(token, func(r rune) bool { return r == '.' })
-				if len(parts) >= 2 && contract.Models[parts[1]] == "" {
-					items = append(items, diagnostic{
-						Range:    rangeFromOffsets(text, start+len("_."), start+len("_.")+len(parts[1])),
-						Severity: 1,
-						Source:   "go-doc",
-						Message:  fmt.Sprintf("Unknown go-doc model '%s'", parts[1]),
-					})
-					continue
-				}
-			} else if looksLikeModelAccessor(root) && contract.Models[root] == "" && contract.Funcs[root] == "" {
+			if looksLikeModelAccessor(root) && actionContract.Models[root] == "" && actionContract.Funcs[root] == "" {
 				items = append(items, diagnostic{
 					Range:    rangeFromOffsets(text, start, start+len(root)),
 					Severity: 1,
@@ -1083,7 +1258,7 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 				})
 				continue
 			}
-			ref, ok := fieldReferenceAt(text, start+(end-start)/2, idx, contract)
+			ref, ok := lastFieldReferenceForToken(text, start, end, idx, actionContract)
 			if !ok {
 				continue
 			}
@@ -1105,6 +1280,31 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 	return items
 }
 
+func modelFunctionCollisionDiagnostics(text string, contract templateIndex) []diagnostic {
+	var items []diagnostic
+	for _, match := range modelPattern.FindAllStringSubmatchIndex(text, -1) {
+		nameStart, nameEnd := match[2], match[3]
+		name := text[nameStart:nameEnd]
+		switch {
+		case builtInTemplateFuncs[name].Signature != "":
+			items = append(items, diagnostic{
+				Range:    rangeFromOffsets(text, nameStart, nameEnd),
+				Severity: 1,
+				Source:   "go-doc",
+				Message:  fmt.Sprintf("Model name '%s' collides with built-in template function '%s'", name, name),
+			})
+		case contract.Funcs[name] != "":
+			items = append(items, diagnostic{
+				Range:    rangeFromOffsets(text, nameStart, nameEnd),
+				Severity: 1,
+				Source:   "go-doc",
+				Message:  fmt.Sprintf("Model name '%s' collides with template function '%s'", name, name),
+			})
+		}
+	}
+	return items
+}
+
 func leadingDefineContractDiagnostics(text string) []diagnostic {
 	var items []diagnostic
 	for _, match := range lspLeadingDefineContractRegexp.FindAllStringSubmatchIndex(text, -1) {
@@ -1120,7 +1320,7 @@ func leadingDefineContractDiagnostics(text string) []diagnostic {
 	return items
 }
 
-func templateIncludeDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
+func templateIncludeDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, relative string, contract templateIndex) (diagnostic, bool) {
 	content, contentOffset, ok := actionContent(actionText)
 	if !ok {
 		return diagnostic{}, false
@@ -1130,12 +1330,26 @@ func templateIncludeDiagnosticForAction(text string, actionStart int, actionText
 		return diagnostic{}, false
 	}
 	name := content[match[2]:match[3]]
-	child, _, ok := templateContractByName(idx, name)
+	child, _, ok := templateContractByNameScopedText(idx, name, relative, text)
 	if !ok || child.Dot == "" {
 		return diagnostic{}, false
 	}
 	if match[4] < 0 || match[5] < 0 {
-		return diagnostic{}, false
+		nameStart := actionStart + contentOffset + match[2]
+		nameEnd := actionStart + contentOffset + match[3]
+		expected := resolveGoType(idx, child.Dot)
+		if expected == "" {
+			expected = child.Dot
+		}
+		if expected == "" {
+			return diagnostic{}, false
+		}
+		return diagnostic{
+			Range:    rangeFromOffsets(text, nameStart, nameEnd),
+			Severity: 2,
+			Source:   "go-doc",
+			Message:  fmt.Sprintf("Template %s expects %s, got no data", name, shortTypeName(expected)),
+		}, true
 	}
 	rawExpression := content[match[4]:match[5]]
 	trimmed := strings.TrimRight(strings.TrimSpace(rawExpression), "- ")
@@ -1176,6 +1390,66 @@ func templateContractByName(idx lspIndex, name string) (templateIndex, string, b
 		}
 	}
 	return templateIndex{}, "", false
+}
+
+func templateContractByNameScoped(idx lspIndex, name, relative string) (templateIndex, string, bool) {
+	normalized := filepath.ToSlash(strings.TrimPrefix(name, "/"))
+	source := filepath.ToSlash(relative)
+	if source != "" {
+		for path, contract := range idx.Templates {
+			if contract.Name == normalized && filepath.ToSlash(contract.Source) == source {
+				return contract, path, true
+			}
+		}
+	}
+	return templateContractByName(idx, name)
+}
+
+func templateContractByNameScopedText(idx lspIndex, name, relative, text string) (templateIndex, string, bool) {
+	normalized := filepath.ToSlash(strings.TrimPrefix(name, "/"))
+	source := filepath.ToSlash(relative)
+	if source != "" {
+		if contract, ok := inlineDefineContractByName(text, idx, normalized, source); ok {
+			return contract, source + "#" + normalized, true
+		}
+	}
+	return templateContractByNameScoped(idx, name, relative)
+}
+
+func inlineDefineContractByName(text string, idx lspIndex, name, source string) (templateIndex, bool) {
+	for _, block := range defineBlocks(text) {
+		if block.name != name {
+			continue
+		}
+		body := text[block.bodyStart:block.bodyEnd]
+		models := parseModels(body)
+		dot := parseDot(body)
+		funcs := parseFuncs(body)
+		if len(models) == 0 && dot == "" && len(funcs) == 0 {
+			return templateIndex{}, false
+		}
+		if dot != "" {
+			if resolved := resolveGoType(idx, dot); resolved != "" {
+				dot = resolved
+			}
+		}
+		for model, typeName := range models {
+			if resolved := resolveGoType(idx, typeName); resolved != "" {
+				models[model] = resolved
+			}
+		}
+		line, column := lineColumn(text, block.start)
+		return templateIndex{
+			Name:   name,
+			Models: models,
+			Dot:    dot,
+			Funcs:  funcs,
+			Source: source,
+			Line:   line,
+			Column: column,
+		}, true
+	}
+	return templateIndex{}, false
 }
 
 func pathBase(path string) string {
@@ -1230,7 +1504,7 @@ type templateIncludeRef struct {
 	end   int
 }
 
-func templateIncludeReferenceAt(text string, offset int, idx lspIndex) (templateIncludeRef, bool) {
+func templateIncludeReferenceAt(text string, offset int, idx lspIndex, relative string) (templateIncludeRef, bool) {
 	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
 		if offset < action[0] || offset > action[1] {
 			continue
@@ -1253,7 +1527,7 @@ func templateIncludeReferenceAt(text string, offset int, idx lspIndex) (template
 			return templateIncludeRef{}, false
 		}
 		name := content[match[2]:match[3]]
-		_, path, ok := templateContractByName(idx, name)
+		_, path, ok := templateContractByNameScopedText(idx, name, relative, text)
 		if !ok {
 			return templateIncludeRef{}, false
 		}
@@ -1285,7 +1559,7 @@ func looksLikeModelAccessor(root string) bool {
 	return isIdentifierToken(root)
 }
 
-func lenDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
+func lenDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex, dotType string) (diagnostic, bool) {
 	name, _, end, ok := builtInFunctionInAction(actionText)
 	if !ok || name != "len" {
 		return diagnostic{}, false
@@ -1306,7 +1580,7 @@ func lenDiagnosticForAction(text string, actionStart int, actionText string, idx
 		return diagnostic{}, false
 	}
 	expressionStart := actionStart + argStart + leading
-	valueType := resolveExpressionValueType(idx, contract, expression, "")
+	valueType := resolveExpressionValueType(idx, contract, expression, dotType)
 	if valueType == "" || isLenable(valueType) {
 		return diagnostic{}, false
 	}
@@ -1318,7 +1592,7 @@ func lenDiagnosticForAction(text string, actionStart int, actionText string, idx
 	}, true
 }
 
-func functionArgumentDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
+func functionArgumentDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex, dotType string) (diagnostic, bool) {
 	name, _, end, ok := templateFunctionInAction(actionText, idx, contract)
 	if !ok {
 		return diagnostic{}, false
@@ -1329,7 +1603,73 @@ func functionArgumentDiagnosticForAction(text string, actionStart int, actionTex
 	}
 	fn := idx.Funcs[fnName]
 	args := templateArgs(actionText, end)
-	if item, ok := functionArityDiagnostic(text, actionStart, name, end, fn, args); ok {
+	return functionArgumentDiagnostic(text, actionStart, name, end, fn, args, idx, contract, dotType)
+}
+
+func nestedFunctionArgumentDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex, dotType string) (diagnostic, bool) {
+	close := strings.LastIndex(actionText, "}}")
+	if close < 0 {
+		return diagnostic{}, false
+	}
+	for index := 0; index < close; index++ {
+		if actionText[index] != '(' || inQuotedString(actionText, index) {
+			continue
+		}
+		parenClose := matchingCloseParen(actionText, index)
+		if parenClose < 0 || parenClose > close {
+			continue
+		}
+		name, _, end, ok := firstCommandInRange(actionText, index+1, parenClose)
+		if !ok {
+			continue
+		}
+		fnName := contract.Funcs[name]
+		if fnName == "" {
+			continue
+		}
+		fn := idx.Funcs[fnName]
+		if item, ok := unsupportedFunctionReturnDiagnostic(text, actionStart, name, index+1, end, fn); ok {
+			return item, true
+		}
+		args := templateArgsInRange(actionText, end, parenClose)
+		if item, ok := functionArgumentDiagnostic(text, actionStart, name, end, fn, args, idx, contract, dotType); ok {
+			return item, true
+		}
+	}
+	return diagnostic{}, false
+}
+
+func methodArgumentDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex, dotType string) (diagnostic, bool) {
+	close := strings.LastIndex(actionText, "}}")
+	if close < 0 {
+		return diagnostic{}, false
+	}
+	for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
+		if inQuotedString(actionText, match[0]) {
+			continue
+		}
+		start := actionStart + match[0]
+		end := actionStart + match[1]
+		ref, ok := lastFieldReferenceForToken(text, start, end, idx, contract)
+		if !ok {
+			continue
+		}
+		owner := idx.Types[ref.ownerType]
+		method, ok := owner.Methods[ref.fieldName]
+		if !ok {
+			continue
+		}
+		fn := goFuncIndex{Name: ref.fieldName, Params: method.Params, Result: method.Type, ReturnOK: true}
+		args := templateArgsInRange(actionText, match[1], close)
+		if item, ok := functionArgumentDiagnostic(text, actionStart, ref.fieldName, match[1], fn, args, idx, contract, dotType); ok {
+			return item, true
+		}
+	}
+	return diagnostic{}, false
+}
+
+func functionArgumentDiagnostic(text string, actionStart int, name string, functionEnd int, fn goFuncIndex, args []templateArg, idx lspIndex, contract templateIndex, dotType string) (diagnostic, bool) {
+	if item, ok := functionArityDiagnostic(text, actionStart, name, functionEnd, fn, args); ok {
 		return item, true
 	}
 	for index, arg := range args {
@@ -1339,9 +1679,9 @@ func functionArgumentDiagnosticForAction(text string, actionStart int, actionTex
 		}
 		actual := literalType(arg.Text)
 		if actual == "" {
-			actual = resolveExpressionValueType(idx, contract, arg.Text, "")
+			actual = resolveExpressionValueType(idx, contract, arg.Text, dotType)
 		}
-		if actual == "" || argumentAssignable(expected, actual) {
+		if actual == "" || argumentAssignable(idx, expected, actual) {
 			continue
 		}
 		return diagnostic{
@@ -1354,7 +1694,31 @@ func functionArgumentDiagnosticForAction(text string, actionStart int, actionTex
 	return diagnostic{}, false
 }
 
-func pipelineFunctionDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex) (diagnostic, bool) {
+func unsupportedFunctionReturnDiagnostic(text string, actionStart int, name string, functionStart, functionEnd int, fn goFuncIndex) (diagnostic, bool) {
+	if templateFunctionResultType(fn) != "" {
+		return diagnostic{}, false
+	}
+	if !fn.ReturnOK {
+		return diagnostic{}, false
+	}
+	results := functionResults(fn)
+	if len(results) == 0 {
+		return diagnostic{
+			Range:    rangeFromOffsets(text, actionStart+functionStart, actionStart+functionEnd),
+			Severity: 2,
+			Source:   "go-doc",
+			Message:  fmt.Sprintf("Function %s cannot be used in a template action because it returns no value", name),
+		}, true
+	}
+	return diagnostic{
+		Range:    rangeFromOffsets(text, actionStart+functionStart, actionStart+functionEnd),
+		Severity: 2,
+		Source:   "go-doc",
+		Message:  fmt.Sprintf("Function %s has unsupported template return values (%s); use one value or (value, error)", name, strings.Join(results, ", ")),
+	}, true
+}
+
+func pipelineFunctionDiagnosticForAction(text string, actionStart int, actionText string, idx lspIndex, contract templateIndex, dotType string) (diagnostic, bool) {
 	segments := templatePipelineSegments(actionText)
 	if len(segments) < 2 {
 		return diagnostic{}, false
@@ -1367,12 +1731,12 @@ func pipelineFunctionDiagnosticForAction(text string, actionStart int, actionTex
 		}
 		name, nameStart, nameEnd, ok := firstCommandInSegment(actionText, segment)
 		if !ok {
-			prevType = resolveExpressionValueType(idx, contract, expression, "")
+			prevType = resolveExpressionValueType(idx, contract, expression, dotType)
 			continue
 		}
 		fnName := contract.Funcs[name]
 		if fnName == "" {
-			prevType = resolveExpressionValueType(idx, contract, expression, "")
+			prevType = resolveExpressionValueType(idx, contract, expression, dotType)
 			continue
 		}
 		fn := idx.Funcs[fnName]
@@ -1396,9 +1760,9 @@ func pipelineFunctionDiagnosticForAction(text string, actionStart int, actionTex
 			}
 			actual := literalType(arg.Text)
 			if actual == "" {
-				actual = resolveExpressionValueType(idx, contract, arg.Text, "")
+				actual = resolveExpressionValueType(idx, contract, arg.Text, dotType)
 			}
-			if actual == "" || argumentAssignable(expected, actual) {
+			if actual == "" || argumentAssignable(idx, expected, actual) {
 				continue
 			}
 			return diagnostic{
@@ -1411,7 +1775,7 @@ func pipelineFunctionDiagnosticForAction(text string, actionStart int, actionTex
 		if piped {
 			pipedIndex := totalArgs - 1
 			expected := expectedArgumentType(fn.Params, pipedIndex)
-			if expected != "" && !argumentAssignable(expected, prevType) {
+			if expected != "" && !argumentAssignable(idx, expected, prevType) {
 				return diagnostic{
 					Range:    rangeFromOffsets(text, actionStart+segments[index-1].Start, actionStart+segments[index-1].End),
 					Severity: 2,
@@ -1635,12 +1999,15 @@ func appendTemplateSegment(segments *[]templateSegment, actionText string, start
 }
 
 func firstCommandInSegment(actionText string, segment templateSegment) (string, int, int, bool) {
-	start := segment.Start
-	for start < segment.End && isSpaceByte(actionText[start]) {
+	return firstCommandInRange(actionText, segment.Start, segment.End)
+}
+
+func firstCommandInRange(actionText string, start, endLimit int) (string, int, int, bool) {
+	for start < endLimit && isSpaceByte(actionText[start]) {
 		start++
 	}
 	end := start
-	for end < segment.End && !isSpaceByte(actionText[end]) {
+	for end < endLimit && !isSpaceByte(actionText[end]) {
 		end++
 	}
 	if start == end {
@@ -1698,10 +2065,21 @@ func isIntegerLiteral(value string) bool {
 	return true
 }
 
-func argumentAssignable(expected, actual string) bool {
+func argumentAssignable(idx lspIndex, expected, actual string) bool {
 	expected = normalizeComparableType(expected)
 	actual = normalizeComparableType(actual)
-	return expected == actual || expected == "any" || expected == "interface{}"
+	if expected == actual || expected == "any" || expected == "interface{}" {
+		return true
+	}
+	resolvedExpected := resolveGoType(idx, expected)
+	if resolvedExpected == "" {
+		resolvedExpected = expected
+	}
+	resolvedActual := resolveGoType(idx, actual)
+	if resolvedActual == "" {
+		resolvedActual = actual
+	}
+	return resolvedExpected == resolvedActual
 }
 
 func normalizeComparableType(value string) string {
@@ -1733,15 +2111,12 @@ func (s *lspServer) completions(params textDocumentPositionParams) []completionI
 	if inModelTypePosition(text, offset) {
 		return typeCompletionItems(idx)
 	}
-	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
+	contract, ok := s.contractForURIAt(params.TextDocument.URI, idx, offset)
 	if !ok {
 		return nil
 	}
 	if prefix, ok := accessorPrefixBeforeCaret(text, offset); ok {
 		return accessorCompletionItems(idx, contract, prefix)
-	}
-	if prefix, ok := scopeModelPrefixBeforeCaret(text, offset); ok {
-		return scopeModelCompletionItems(idx, contract, prefix)
 	}
 	targetType, ok := fieldTargetBeforeCaret(text, offset, idx, contract)
 	if !ok {
@@ -1791,19 +2166,6 @@ func accessorPrefixBeforeCaret(text string, offset int) (string, bool) {
 		return token, true
 	}
 	return "", false
-}
-
-func scopeModelPrefixBeforeCaret(text string, offset int) (string, bool) {
-	before := strings.TrimRight(text[:max(0, min(offset, len(text)))], " \t\r\n")
-	token := trailingToken(before)
-	if !strings.HasPrefix(token, "_.") {
-		return "", false
-	}
-	prefix := strings.TrimPrefix(token, "_.")
-	if strings.Contains(prefix, ".") {
-		return "", false
-	}
-	return prefix, true
 }
 
 func isIdentifierToken(token string) bool {
@@ -1904,36 +2266,7 @@ func accessorCompletionItems(idx lspIndex, contract templateIndex, prefix string
 			Kind:          6,
 			Detail:        detail,
 			Documentation: doc,
-			InsertText:    name + ".",
-		})
-	}
-	return items
-}
-
-func scopeModelCompletionItems(idx lspIndex, contract templateIndex, prefix string) []completionItem {
-	names := make([]string, 0, len(contract.Models))
-	for name := range contract.Models {
-		if strings.HasPrefix(name, prefix) {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	items := make([]completionItem, 0, len(names))
-	for _, name := range names {
-		typeName := contract.Models[name]
-		typ := idx.Types[typeName]
-		detail := typeName
-		doc := ""
-		if typ.Name != "" {
-			detail = typ.Name
-			doc = typ.Doc
-		}
-		items = append(items, completionItem{
-			Label:         name,
-			Kind:          6,
-			Detail:        detail,
-			Documentation: doc,
-			InsertText:    name + ".",
+			InsertText:    name,
 		})
 	}
 	return items
@@ -1997,8 +2330,12 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 			Range:    rangeFromOffsets(text, ref.start, ref.end),
 		}
 	}
-	if ref, ok := templateIncludeReferenceAt(text, offset, idx); ok {
-		child, _, _ := templateContractByName(idx, ref.name)
+	relative := ""
+	if path, err := pathFromURI(params.TextDocument.URI); err == nil {
+		relative = rel(idx.rootPath, path)
+	}
+	if ref, ok := templateIncludeReferenceAt(text, offset, idx, relative); ok {
+		child, _, _ := templateContractByNameScopedText(idx, ref.name, relative, text)
 		expected := resolveGoType(idx, child.Dot)
 		if expected == "" {
 			expected = child.Dot
@@ -2011,9 +2348,21 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 			Range:    rangeFromOffsets(text, ref.start, ref.end),
 		}
 	}
-	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
+	contract, ok := s.contractForURIAt(params.TextDocument.URI, idx, offset)
 	if !ok {
 		return nil
+	}
+	if ref, ok := modelNameReferenceAt(text, offset, contract); ok {
+		typeName := contract.Models[ref.name]
+		typ := idx.Types[typeName]
+		detail := typeName
+		if typ.Name != "" {
+			detail = typ.Name
+		}
+		return hover{
+			Contents: markdown(fmt.Sprintf("```go\n%s\n```\n%s", detail, typ.Doc)),
+			Range:    rangeFromOffsets(text, ref.start, ref.end),
+		}
 	}
 	if name, start, end, ok := templateFunctionAt(text, offset, idx, contract); ok {
 		if fn, builtIn := builtInTemplateFuncs[name]; builtIn {
@@ -2071,8 +2420,12 @@ func (s *lspServer) definition(params textDocumentPositionParams) any {
 		fn := idx.Funcs[ref.funcName]
 		return locationForTarget(idx.rootPath, fn.File, fn.Line, fn.Column)
 	}
-	if ref, ok := templateIncludeReferenceAt(text, offset, idx); ok {
-		child, _, _ := templateContractByName(idx, ref.name)
+	relative := ""
+	if path, err := pathFromURI(params.TextDocument.URI); err == nil {
+		relative = rel(idx.rootPath, path)
+	}
+	if ref, ok := templateIncludeReferenceAt(text, offset, idx, relative); ok {
+		child, _, _ := templateContractByNameScopedText(idx, ref.name, relative, text)
 		targetPath := ref.path
 		targetLine := 1
 		targetColumn := 1
@@ -2083,9 +2436,13 @@ func (s *lspServer) definition(params textDocumentPositionParams) any {
 		}
 		return locationForTarget(idx.rootPath, targetPath, targetLine, targetColumn)
 	}
-	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
+	contract, ok := s.contractForURIAt(params.TextDocument.URI, idx, offset)
 	if !ok {
 		return nil
+	}
+	if ref, ok := modelNameReferenceAt(text, offset, contract); ok {
+		typ := idx.Types[contract.Models[ref.name]]
+		return locationForTarget(idx.rootPath, typ.File, typ.Line, typ.Column)
 	}
 	if name, _, _, ok := templateFunctionAt(text, offset, idx, contract); ok {
 		if fnName := contract.Funcs[name]; fnName != "" {
@@ -2121,7 +2478,7 @@ func (s *lspServer) prepareRename(params textDocumentPositionParams) any {
 		return nil
 	}
 	idx := s.indexForURI(params.TextDocument.URI)
-	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
+	contract, ok := s.contractForURIAt(params.TextDocument.URI, idx, offsetAt(text, params.Position))
 	if !ok {
 		return nil
 	}
@@ -2142,7 +2499,7 @@ func (s *lspServer) rename(params renameParams) any {
 		return workspaceEdit{Changes: map[string][]textEdit{}}
 	}
 	idx := s.indexForURI(params.TextDocument.URI)
-	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
+	contract, ok := s.contractForURIAt(params.TextDocument.URI, idx, offsetAt(text, params.Position))
 	if !ok {
 		return workspaceEdit{Changes: map[string][]textEdit{}}
 	}
@@ -2160,13 +2517,18 @@ func (s *lspServer) codeActions(params codeActionParams) []codeAction {
 		return nil
 	}
 	idx := s.indexForURI(params.TextDocument.URI)
-	contract, ok := s.contractForURI(params.TextDocument.URI, idx)
+	actionOffset := offsetAt(text, params.Range.Start)
+	contract, ok := s.contractForURIAt(params.TextDocument.URI, idx, actionOffset)
 	if !ok {
 		return nil
 	}
+	relative := ""
+	if path, err := pathFromURI(params.TextDocument.URI); err == nil {
+		relative = rel(idx.rootPath, path)
+	}
 	var actions []codeAction
 	seen := make(map[string]bool)
-	for _, item := range diagnosticsForText(text, idx, contract) {
+	for _, item := range diagnosticsForTextScoped(text, idx, contract, relative) {
 		if len(params.Context.Diagnostics) > 0 {
 			if !diagnosticListed(item, params.Context.Diagnostics) {
 				continue
@@ -2207,7 +2569,7 @@ func moveDefineContractCodeAction(uri string, text string, item diagnostic) (cod
 		}
 		removeEnd := match[8]
 		defineEnd := match[9]
-		comment := strings.TrimSpace(text[commentStart:commentEnd])
+		comment := compactContractComment(strings.TrimSpace(text[commentStart:commentEnd]))
 		newText := "\n" + comment + "\n"
 		return codeAction{
 			Title:       "Move go-doc annotations inside define",
@@ -2222,6 +2584,14 @@ func moveDefineContractCodeAction(uri string, text string, item diagnostic) (cod
 		}, true
 	}
 	return codeAction{}, false
+}
+
+func compactContractComment(comment string) string {
+	body := strings.TrimSpace(contractScanText(comment))
+	if body == "" || strings.Contains(body, "\n") {
+		return comment
+	}
+	return "{{/* " + body + " */}}"
 }
 
 func missingFieldCodeAction(text string, idx lspIndex, contract templateIndex, item diagnostic) (codeAction, bool) {
@@ -2466,11 +2836,19 @@ func (s *lspServer) semanticTokens(params semanticTokensParams) semanticTokens {
 	}
 	idx := s.indexForURI(params.TextDocument.URI)
 	contract, _ := s.contractForURI(params.TextDocument.URI, idx)
-	tokens := semanticTokensForText(text, idx, contract)
+	relative := ""
+	if path, err := pathFromURI(params.TextDocument.URI); err == nil {
+		relative = rel(idx.rootPath, path)
+	}
+	tokens := semanticTokensForTextScoped(text, idx, contract, relative)
 	return semanticTokens{Data: encodeSemanticTokens(text, tokens)}
 }
 
 func semanticTokensForText(text string, idx lspIndex, contract templateIndex) []semanticToken {
+	return semanticTokensForTextScoped(text, idx, contract, "")
+}
+
+func semanticTokensForTextScoped(text string, idx lspIndex, contract templateIndex, relative string) []semanticToken {
 	var tokens []semanticToken
 	for _, match := range lspContractTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
 		start, end := match[2], match[3]
@@ -2511,7 +2889,8 @@ func semanticTokensForText(text string, idx lspIndex, contract templateIndex) []
 		if isTemplateCommentAction(actionText) {
 			continue
 		}
-		for _, token := range templateFunctionTokensInAction(actionText, idx, contract) {
+		actionContract := activeContractAt(text, idx, relative, contract, action[0])
+		for _, token := range templateFunctionTokensInAction(actionText, idx, actionContract) {
 			tokens = append(tokens, semanticToken{start: action[0] + token.start, length: token.end - token.start, tokenType: semanticFunction})
 		}
 		for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
@@ -2522,22 +2901,14 @@ func semanticTokensForText(text string, idx lspIndex, contract templateIndex) []
 			end := action[0] + match[1]
 			token := actionText[match[0]:match[1]]
 			root := tokenRoot(token)
-			if contract.Models[root] != "" || contract.Funcs[root] != "" || (root == "_" && len(contract.Models) > 0) || strings.HasPrefix(root, "$") {
+			if actionContract.Models[root] != "" || actionContract.Funcs[root] != "" || strings.HasPrefix(root, "$") {
 				tokens = append(tokens, semanticToken{start: start, length: len(root), tokenType: semanticAccessor})
 			}
-			if root == "_" && len(contract.Models) > 0 {
-				parts := strings.FieldsFunc(token, func(r rune) bool { return r == '.' })
-				if len(parts) >= 2 && contract.Models[parts[1]] != "" {
-					tokens = append(tokens, semanticToken{start: start + len("_."), length: len(parts[1]), tokenType: semanticType})
+			for _, ref := range fieldReferencesForToken(text, start, end, idx, actionContract) {
+				owner := idx.Types[ref.ownerType]
+				if hasMember(owner, ref.fieldName) {
+					tokens = append(tokens, semanticToken{start: ref.start, length: ref.end - ref.start, tokenType: semanticField})
 				}
-			}
-			ref, ok := fieldReferenceAt(text, start+(end-start)/2, idx, contract)
-			if !ok {
-				continue
-			}
-			owner := idx.Types[ref.ownerType]
-			if hasMember(owner, ref.fieldName) {
-				tokens = append(tokens, semanticToken{start: ref.start, length: ref.end - ref.start, tokenType: semanticField})
 			}
 		}
 	}
@@ -2806,12 +3177,6 @@ func resolveExpressionValueType(idx lspIndex, contract templateIndex, expression
 	case strings.HasPrefix(root, "$"):
 		rootType = contract.Models[root]
 		path = parts[1:]
-	case root == "_":
-		var ok bool
-		rootType, path, ok = resolveScopePath(idx, contract, parts)
-		if !ok {
-			return ""
-		}
 	case strings.HasPrefix(clean, "."):
 		rootType = dotType
 		path = parts
@@ -2943,16 +3308,6 @@ func functionResults(fn goFuncIndex) []string {
 func isCompositeValueType(typeExpr string) bool {
 	normalized := stripPointer(strings.TrimSpace(typeExpr))
 	return strings.HasPrefix(normalized, "[]") || strings.HasPrefix(normalized, "[") || strings.HasPrefix(normalized, "map[")
-}
-
-func resolveScopePath(idx lspIndex, contract templateIndex, parts []string) (string, []string, bool) {
-	if len(parts) < 2 || parts[0] != "_" {
-		return "", nil, false
-	}
-	if rootType := contract.Models[parts[1]]; rootType != "" {
-		return rootType, parts[2:], true
-	}
-	return "", nil, false
 }
 
 func resolveFieldPath(idx lspIndex, rootType string, fields []string) string {
@@ -3191,14 +3546,6 @@ func fieldTargetBeforeCaret(text string, offset int, idx lspIndex, contract temp
 	lastDot := strings.LastIndex(token, ".")
 	chain := token[:lastDot+1]
 	parts := strings.FieldsFunc(chain, func(r rune) bool { return r == '.' })
-	if strings.HasPrefix(chain, "_.") {
-		rootType, path, ok := resolveScopePath(idx, contract, parts)
-		if !ok {
-			return "", false
-		}
-		typeName := resolveFieldPath(idx, rootType, path)
-		return typeName, typeName != ""
-	}
 	if !strings.HasPrefix(chain, ".") {
 		vars := scopeAt(text, offset, idx, contract).vars
 		rootType := contract.Models[parts[0]]
@@ -3224,58 +3571,108 @@ func fieldReferenceAt(text string, offset int, idx lspIndex, contract templateIn
 	if token == "" {
 		return fieldRef{}, false
 	}
-	parts := strings.FieldsFunc(token, func(r rune) bool { return r == '.' })
-	if len(parts) == 0 {
-		return fieldRef{}, false
-	}
-	if strings.HasPrefix(token, ".") {
-		if rootType, ok := parenthesizedRootBefore(text, start, idx, contract); ok {
-			ownerType := resolveFieldPath(idx, rootType, parts[:len(parts)-1])
-			if ownerType == "" {
-				return fieldRef{}, false
-			}
-			fieldStart := end - len(parts[len(parts)-1])
-			return fieldRef{ownerType: ownerType, fieldName: parts[len(parts)-1], start: fieldStart, end: end}, true
+	for _, ref := range fieldReferencesForToken(text, start, end, idx, contract) {
+		if offset >= ref.start && offset <= ref.end {
+			return ref, true
 		}
-	}
-	if strings.HasPrefix(token, "_.") {
-		rootType, path, ok := resolveScopePath(idx, contract, parts)
-		if !ok || len(path) == 0 {
-			return fieldRef{}, false
-		}
-		ownerType := resolveFieldPath(idx, rootType, path[:len(path)-1])
-		if ownerType == "" {
-			return fieldRef{}, false
-		}
-		fieldStart := end - len(path[len(path)-1])
-		return fieldRef{ownerType: ownerType, fieldName: path[len(path)-1], start: fieldStart, end: end}, true
-	}
-	if !strings.HasPrefix(token, ".") {
-		vars := scopeAt(text, offset, idx, contract).vars
-		rootType := contract.Models[parts[0]]
-		if rootType == "" {
-			rootType = vars[parts[0]]
-		}
-		if rootType == "" {
-			rootType = functionResultValueType(idx, contract, parts[0])
-		}
-		ownerType := resolveFieldPath(idx, rootType, parts[1:len(parts)-1])
-		if ownerType == "" {
-			return fieldRef{}, false
-		}
-		fieldStart := end - len(parts[len(parts)-1])
-		return fieldRef{ownerType: ownerType, fieldName: parts[len(parts)-1], start: fieldStart, end: end}, true
-	}
-	if strings.HasPrefix(token, ".") {
-		dotType := scopeAt(text, offset, idx, contract).dotType
-		ownerType := resolveFieldPath(idx, dotType, parts[:len(parts)-1])
-		if ownerType == "" {
-			return fieldRef{}, false
-		}
-		fieldStart := end - len(parts[len(parts)-1])
-		return fieldRef{ownerType: ownerType, fieldName: parts[len(parts)-1], start: fieldStart, end: end}, true
 	}
 	return fieldRef{}, false
+}
+
+func lastFieldReferenceForToken(text string, start, end int, idx lspIndex, contract templateIndex) (fieldRef, bool) {
+	refs := fieldReferencesForToken(text, start, end, idx, contract)
+	if len(refs) == 0 {
+		return fieldRef{}, false
+	}
+	return refs[len(refs)-1], true
+}
+
+func fieldReferencesForToken(text string, start, end int, idx lspIndex, contract templateIndex) []fieldRef {
+	if start < 0 || end > len(text) || start >= end {
+		return nil
+	}
+	token := text[start:end]
+	ranges := tokenIdentifierRanges(token, start)
+	if len(ranges) == 0 {
+		return nil
+	}
+
+	scope := scopeAt(text, start, idx, contract)
+	rootType := ""
+	memberRanges := ranges
+	if strings.HasPrefix(token, ".") {
+		if parentType, ok := parenthesizedRootBefore(text, start, idx, contract); ok {
+			rootType = parentType
+		} else {
+			rootType = scope.dotType
+		}
+	} else {
+		root := token[ranges[0].start-start : ranges[0].end-start]
+		rootType = contract.Models[root]
+		if rootType == "" {
+			rootType = scope.vars[root]
+		}
+		if rootType == "" {
+			rootType = functionResultValueType(idx, contract, root)
+		}
+		memberRanges = ranges[1:]
+	}
+	if rootType == "" || len(memberRanges) == 0 {
+		return nil
+	}
+
+	var refs []fieldRef
+	ownerType := resolveGoType(idx, rootType)
+	if ownerType == "" {
+		ownerType = rootType
+	}
+	for _, rng := range memberRanges {
+		name := text[rng.start:rng.end]
+		if ownerType == "" {
+			return refs
+		}
+		refs = append(refs, fieldRef{ownerType: ownerType, fieldName: name, start: rng.start, end: rng.end})
+		owner := idx.Types[ownerType]
+		valueType, ok := memberValueType(owner, name)
+		if !ok {
+			return refs
+		}
+		ownerType = resolveGoType(idx, valueType)
+		if ownerType == "" {
+			ownerType = valueType
+		}
+	}
+	return refs
+}
+
+type tokenRange struct {
+	start int
+	end   int
+}
+
+func tokenIdentifierRanges(token string, base int) []tokenRange {
+	var ranges []tokenRange
+	for index := 0; index < len(token); {
+		for index < len(token) && (token[index] == '.' || !isIdentifierTokenStart(token[index])) {
+			index++
+		}
+		start := index
+		for index < len(token) && isIdentifierTokenPart(token[index]) {
+			index++
+		}
+		if start < index {
+			ranges = append(ranges, tokenRange{start: base + start, end: base + index})
+		}
+	}
+	return ranges
+}
+
+func isIdentifierTokenStart(b byte) bool {
+	return b == '_' || b == '$' || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
+func isIdentifierTokenPart(b byte) bool {
+	return isIdentifierTokenStart(b) || (b >= '0' && b <= '9')
 }
 
 func parenthesizedRootBefore(text string, dotStart int, idx lspIndex, contract templateIndex) (string, bool) {
@@ -3409,17 +3806,6 @@ func modelNameReferenceAt(text string, offset int, contract templateIndex) (mode
 		return modelNameRef{}, false
 	}
 	parts := strings.FieldsFunc(token, func(r rune) bool { return r == '.' })
-	if strings.HasPrefix(token, "_.") {
-		if len(parts) < 2 || contract.Models[parts[1]] == "" {
-			return modelNameRef{}, false
-		}
-		modelStart := start + len("_.")
-		modelEnd := modelStart + len(parts[1])
-		if offset < modelStart || offset > modelEnd {
-			return modelNameRef{}, false
-		}
-		return modelNameRef{name: parts[1], start: modelStart, end: modelEnd}, true
-	}
 	if strings.HasPrefix(token, ".") || len(parts) == 0 || contract.Models[parts[0]] == "" {
 		return modelNameRef{}, false
 	}
@@ -3454,13 +3840,6 @@ func modelRenameEdits(text string, contract templateIndex, oldName, newName stri
 			tokenStart := action[0] + match[0]
 			token := actionText[match[0]:match[1]]
 			parts := strings.FieldsFunc(token, func(r rune) bool { return r == '.' })
-			if strings.HasPrefix(token, "_.") {
-				if len(parts) >= 2 && parts[1] == oldName {
-					start := tokenStart + len("_.")
-					add(start, start+len(oldName))
-				}
-				continue
-			}
 			if !strings.HasPrefix(token, ".") && len(parts) > 0 && parts[0] == oldName && contract.Models[oldName] != "" {
 				add(tokenStart, tokenStart+len(oldName))
 			}
@@ -3532,7 +3911,19 @@ func locationForTarget(root, file string, line, column int) any {
 		column = 1
 	}
 	pos := position{Line: line - 1, Character: column - 1}
-	return location{URI: uriFromPath(filepath.Join(root, filepath.FromSlash(file))), Range: lspRange{Start: pos, End: pos}}
+	return location{URI: uriFromPath(targetPath(root, file)), Range: lspRange{Start: pos, End: pos}}
+}
+
+func targetPath(root, file string) string {
+	file = filepath.FromSlash(file)
+	if strings.HasPrefix(file, "$GOROOT") {
+		rest := strings.TrimLeft(strings.TrimPrefix(file, "$GOROOT"), `\/`)
+		return filepath.Join(runtime.GOROOT(), rest)
+	}
+	if filepath.IsAbs(file) {
+		return file
+	}
+	return filepath.Join(root, file)
 }
 
 func pathFromURI(raw string) (string, error) {

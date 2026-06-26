@@ -23,8 +23,13 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
             """.trimIndent()
         }
 
-        val contract = index.contractForFile(project, virtualFile.path) ?: return null
-        GoDocTemplateContext.templateFunctionAt(file.text, source.textOffset, index, contract)?.let { reference ->
+        val hoverOffsets = hoverOffsets(source, file.text)
+        val contract = hoverOffsets
+            .firstNotNullOfOrNull { offset -> index.contractForFileAt(project, virtualFile.path, offset) }
+            ?: return null
+        hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.templateFunctionAt(file.text, offset, index, contract)
+        }?.let { reference ->
             val fn = index.funcs[reference.funcName] ?: return null
             val signature = fn.signature.ifBlank { "func ${fn.name}" }
             val doc = fn.doc.ifBlank { "No function documentation found in the Go source." }
@@ -35,8 +40,17 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
             """.trimIndent()
         }
 
-        val reference = GoDocTemplateContext.fieldReferenceAt(file.text, source.textOffset, index, contract) ?: return null
+        val reference = hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract)
+        } ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
+        if (contract.models[reference.memberName] == reference.ownerTypeName) {
+            val doc = owner.doc.ifBlank { "No type documentation found in the Go source." }
+            return """
+                <div class="definition"><b>${escape(owner.name)}</b> <code>${escape(owner.fqName)}</code></div>
+                <div class="content">${escape(doc).replace("\n", "<br/>")}</div>
+            """.trimIndent()
+        }
         owner.fields[reference.memberName]?.let { field ->
             val doc = field.doc.ifBlank { "No field documentation found in the Go source." }
             return """
@@ -73,14 +87,24 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
             return "template ${reference.templateName} expects $expectedLabel"
         }
 
-        val contract = index.contractForFile(project, virtualFile.path) ?: return null
-        GoDocTemplateContext.templateFunctionAt(file.text, source.textOffset, index, contract)?.let { reference ->
+        val hoverOffsets = hoverOffsets(source, file.text)
+        val contract = hoverOffsets
+            .firstNotNullOfOrNull { offset -> index.contractForFileAt(project, virtualFile.path, offset) }
+            ?: return null
+        hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.templateFunctionAt(file.text, offset, index, contract)
+        }?.let { reference ->
             val fn = index.funcs[reference.funcName] ?: return null
             return "${fn.name} ${fn.signature.ifBlank { fn.fqName }}".trim()
         }
 
-        val reference = GoDocTemplateContext.fieldReferenceAt(file.text, source.textOffset, index, contract) ?: return null
+        val reference = hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract)
+        } ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
+        if (contract.models[reference.memberName] == reference.ownerTypeName) {
+            return "${owner.name} ${owner.fqName}".trim()
+        }
         owner.fields[reference.memberName]?.let { field ->
             return "${owner.name}.${field.name} ${field.type}"
         }
@@ -96,5 +120,31 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
+    }
+
+    private fun hoverOffsets(element: PsiElement, text: String): List<Int> {
+        val start = element.textRange?.startOffset ?: element.textOffset
+        val end = element.textRange?.endOffset ?: element.textOffset
+        val offsets = mutableListOf(
+            element.textOffset,
+            start,
+            end - 1,
+            element.textOffset - 1,
+            element.textOffset + 1,
+        )
+        var tokenStart = start.coerceIn(0, text.length)
+        var tokenEnd = end.coerceIn(tokenStart, text.length)
+        while (tokenStart > 0 && isTemplateTokenChar(text[tokenStart - 1])) tokenStart--
+        while (tokenEnd < text.length && isTemplateTokenChar(text[tokenEnd])) tokenEnd++
+        offsets.add(tokenStart)
+        offsets.add(tokenEnd - 1)
+        offsets.add((tokenStart + tokenEnd) / 2)
+        return offsets
+            .filter { it >= 0 && it <= text.length }
+            .distinct()
+    }
+
+    private fun isTemplateTokenChar(char: Char): Boolean {
+        return char == '$' || char == '_' || char == '.' || char.isLetterOrDigit()
     }
 }

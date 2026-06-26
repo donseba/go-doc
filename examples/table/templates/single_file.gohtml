@@ -1,6 +1,4 @@
-{{/*
-@model Page github.com/donseba/go-doc/examples/table.UserTablePage
-*/}}
+{{/* @model Page github.com/donseba/go-doc/examples/table.UserTablePage */}}
 <!doctype html>
 <html lang="en">
 <head>
@@ -43,9 +41,7 @@
 </html>
 
 {{ define "single_file_user_row" }}
-{{/*
-@dot github.com/donseba/go-doc/examples/table.User
-*/}}
+{{/* @dot github.com/donseba/go-doc/examples/table.User */}}
 <tr id="single-user-{{ .ID }}">
     <td>{{ .ID }}</td>
     <td>{{ .Name }}</td>
@@ -56,8 +52,6 @@
 {{ end }}
 
 {{ define "single_file_status" }}
-{{/*
-@dot github.com/donseba/go-doc/examples/table.User
-*/}}
+{{/* @dot github.com/donseba/go-doc/examples/table.User */}}
 <span class="pill">{{ .Status }}</span>
 {{ end }}

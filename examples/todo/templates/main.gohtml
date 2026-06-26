@@ -2,11 +2,6 @@
 
 @model Page github.com/donseba/go-doc/examples/todo.TodoPage
 
-@func mul github.com/donseba/go-doc/examples/todo.Mul
-@func add github.com/donseba/go-doc/examples/todo.Add
-@func sub github.com/donseba/go-doc/examples/todo.Sub
-@func div github.com/donseba/go-doc/examples/todo.Div
-
 */}}
 <!doctype html>
 <html lang="en">
@@ -38,12 +33,9 @@
         {{ template "todo_detail.gohtml" }}
     </main>
 
-    {{ div Page.DoneCount "blas" }}
-    {{ mul 10 2 }}
-    {{ add 10 2 }}
-    {{ sub 10 2 }}
     <footer>
         Generated at {{ Page.GeneratedAt.Format "15:04:05" }}.
+        {{ add Page.OpenCount Page.DoneCount }} total tasks.
     </footer>
 </body>
 </html>

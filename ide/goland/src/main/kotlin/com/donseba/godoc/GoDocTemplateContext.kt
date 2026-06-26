@@ -37,51 +37,65 @@ object GoDocTemplateContext {
         contract: TemplateContract,
     ): GoDocFieldReference? {
         val token = tokenAt(text, offset) ?: return null
-        val parts = token.text.split('.').filter { it.isNotBlank() }
-        if (parts.isEmpty()) return null
+        val boundedOffset = offset.coerceIn(0, text.length)
+        val references = fieldReferencesForToken(text, token, index, contract)
+        return references.firstOrNull { boundedOffset >= it.startOffset && boundedOffset <= it.endOffset }
+            ?: references.firstOrNull { boundedOffset + 1 == it.startOffset && text.getOrNull(boundedOffset) == '.' }
+            ?: references.firstOrNull { boundedOffset == it.startOffset - 1 && text.getOrNull(boundedOffset) == '.' }
+            ?: references.firstOrNull { boundedOffset == it.endOffset }
+    }
 
-        val scopedModel = token.text.startsWith("_.") && parts.firstOrNull() == "_"
-        val parenthesizedRoot = if (token.text.startsWith(".")) {
-            parenthesizedRootBefore(text, token.startOffset, index, contract)
+    private fun fieldReferencesForToken(
+        text: String,
+        token: Token,
+        index: GoDocIndex,
+        contract: TemplateContract,
+    ): List<GoDocFieldReference> {
+        val ranges = tokenIdentifierRanges(token)
+        if (ranges.isEmpty()) return emptyList()
+
+        val scopeOffset = token.startOffset
+        var rootType: String?
+        var memberRanges = ranges
+        val references = mutableListOf<GoDocFieldReference>()
+
+        if (token.text.startsWith(".")) {
+            rootType = parenthesizedRootBefore(text, token.startOffset, index, contract)
+                ?: dotTypeAt(text, scopeOffset, index, contract)
         } else {
-            null
+            val rootName = text.substring(ranges.first().first, ranges.first().last + 1)
+            rootType = contract.models[rootName]
+                ?: scopedVariablesAt(text, scopeOffset, index, contract)[rootName]
+                ?: index.resolveExpressionType(contract, rootName)
+            if (rootType != null && contract.models[rootName] == rootType) {
+                references.add(
+                    GoDocFieldReference(
+                        ownerTypeName = rootType,
+                        memberName = rootName,
+                        startOffset = ranges.first().first,
+                        endOffset = ranges.first().last + 1,
+                    ),
+                )
+            }
+            memberRanges = ranges.drop(1)
         }
-        val rootType = when {
-            parenthesizedRoot != null -> parenthesizedRoot
-            scopedModel -> parts.getOrNull(1)?.let { contract.models[it] }
-            token.text.startsWith("$") -> contract.models[parts.first()]
-                ?: scopedVariablesAt(text, offset, index, contract)[parts.first()]
-            token.text.startsWith(".") -> dotTypeAt(text, offset, index, contract)
-            else -> contract.models[parts.first()]
-                ?: index.resolveExpressionType(contract, parts.first())
-        } ?: return null
+        if (rootType == null || memberRanges.isEmpty()) return references
 
-        val fieldName = parts.last()
-        val memberStart = token.endOffset - fieldName.length
-        val rootOnlyReference = parts.size == 1 && !token.text.startsWith(".")
-        if (rootOnlyReference) {
-            return GoDocFieldReference(
-                ownerTypeName = rootType,
-                memberName = parts.first(),
-                startOffset = token.startOffset,
-                endOffset = token.endOffset,
+        var ownerType = index.resolveGoType(rootType) ?: rootType
+        for (range in memberRanges) {
+            val name = text.substring(range.first, range.last + 1)
+            references.add(
+                GoDocFieldReference(
+                    ownerTypeName = ownerType,
+                    memberName = name,
+                    startOffset = range.first,
+                    endOffset = range.last + 1,
+                ),
             )
+            val memberType = index.membersForType(ownerType)[name] ?: return references
+            ownerType = index.resolveGoType(memberType) ?: memberType
         }
-
-        val ownerPath = if (token.text.startsWith(".")) {
-            parts.dropLast(1)
-        } else if (scopedModel) {
-            parts.drop(2).dropLast(1)
-        } else {
-            parts.drop(1).dropLast(1)
-        }
-        val ownerType = index.resolveFieldPath(rootType, ownerPath) ?: rootType
-        return GoDocFieldReference(
-            ownerTypeName = ownerType,
-            memberName = fieldName,
-            startOffset = memberStart,
-            endOffset = token.endOffset,
-        )
+        return references
     }
 
     private fun parenthesizedRootBefore(
@@ -233,16 +247,22 @@ object GoDocTemplateContext {
         index: GoDocIndex,
         contract: TemplateContract,
     ): List<GoDocFieldReference> {
-        return tokenPattern.findAll(text, startOffset)
-            .takeWhile { it.range.first < endOffset }
-            .mapNotNull { match ->
-                if (inQuotedString(text, match.range.first)) return@mapNotNull null
+        val scan = expandedTokenRange(text, startOffset, endOffset)
+        return tokenPattern.findAll(text, scan.first)
+            .takeWhile { it.range.first < scan.last }
+            .flatMap { match ->
+                if (inQuotedString(text, match.range.first)) return@flatMap emptyList()
                 val token = match.value
-                if (!token.contains('.') && contract.models[token] == null) return@mapNotNull null
-                val middle = match.range.first + token.length / 2
-                fieldReferenceAt(text, middle, index, contract)
+                if (!token.contains('.') && contract.models[token] == null) return@flatMap emptyList()
+                fieldReferencesForToken(
+                    text,
+                    Token(token, match.range.first, match.range.last + 1),
+                    index,
+                    contract,
+                )
             }
             .filter { it.startOffset < endOffset && it.endOffset > startOffset }
+            .distinctBy { "${it.startOffset}:${it.endOffset}:${it.ownerTypeName}:${it.memberName}" }
             .toList()
     }
 
@@ -312,20 +332,27 @@ object GoDocTemplateContext {
     }
 
     private fun contractForText(text: String, index: GoDocIndex): TemplateContract? {
-        val models = modelContractPattern.findAll(text).associate { match ->
+        val contractText = contractScanText(text)
+        val models = modelContractPattern.findAll(contractText).associate { match ->
             val name = match.groupValues[1]
             val rawType = match.groupValues[2]
             name to (index.resolveGoType(rawType) ?: rawType)
         }
-        val dot = dotContractPattern.find(text)?.let { match ->
+        val dot = dotContractPattern.find(contractText)?.let { match ->
             val rawType = normalizeType(match.groupValues[1])
             index.resolveGoType(rawType) ?: rawType
         }.orEmpty()
-        val funcs = funcContractPattern.findAll(text).associate { match ->
+        val funcs = funcContractPattern.findAll(contractText).associate { match ->
             match.groupValues[1] to normalizeType(match.groupValues[2])
         }
         if (models.isEmpty() && dot.isEmpty() && funcs.isEmpty()) return null
         return TemplateContract(models = models, dot = dot, funcs = funcs)
+    }
+
+    private fun contractScanText(text: String): String {
+        val matches = templateCommentBodyPattern.findAll(text).map { it.groupValues[1].trim() }.filter { it.isNotBlank() }.toList()
+        if (matches.isEmpty()) return text
+        return matches.joinToString(separator = "\n", postfix = "\n")
     }
 
     private fun dotTypeAt(text: String, offset: Int, index: GoDocIndex, contract: TemplateContract): String? {
@@ -398,6 +425,44 @@ object GoDocTemplateContext {
         return Token(token, start, end).takeIf { token.contains('.') || token in modelNamesNear(text, start) }
     }
 
+    private fun expandedTokenRange(text: String, startOffset: Int, endOffset: Int): IntRange {
+        var start = startOffset.coerceIn(0, text.length)
+        var end = endOffset.coerceIn(start, text.length)
+        while (start > 0 && isTokenChar(text[start - 1])) {
+            start--
+        }
+        while (end < text.length && isTokenChar(text[end])) {
+            end++
+        }
+        return start until end
+    }
+
+    private fun tokenIdentifierRanges(token: Token): List<IntRange> {
+        val ranges = mutableListOf<IntRange>()
+        var index = 0
+        while (index < token.text.length) {
+            while (index < token.text.length && (token.text[index] == '.' || !isIdentifierStart(token.text[index]))) {
+                index++
+            }
+            val start = index
+            while (index < token.text.length && isIdentifierPart(token.text[index])) {
+                index++
+            }
+            if (start < index) {
+                ranges.add((token.startOffset + start) until (token.startOffset + index))
+            }
+        }
+        return ranges
+    }
+
+    private fun isIdentifierStart(char: Char): Boolean {
+        return char == '$' || char == '_' || char.isLetter()
+    }
+
+    private fun isIdentifierPart(char: Char): Boolean {
+        return isIdentifierStart(char) || char.isDigit()
+    }
+
     private fun isTokenChar(char: Char): Boolean {
         return char == '$' || char == '_' || char == '.' || char.isLetterOrDigit()
     }
@@ -453,5 +518,6 @@ object GoDocTemplateContext {
     private val typePatterns = listOf(modelTypePattern, dotTypePattern)
     private val funcTypePattern = Regex("""@func\s+[\u0024A-Za-z][A-Za-z0-9_]*\s+([A-Za-z0-9_./\-]+)""")
     private val modelDeclarationPattern = Regex("""@model\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+[A-Za-z0-9_./\-]+""")
+    private val templateCommentBodyPattern = Regex("""(?s)\{\{/\*(.*?)\*/\}\}""")
     private val tokenPattern = Regex("""[\u0024_A-Za-z][\u0024_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)*|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*""")
 }

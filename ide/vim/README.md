@@ -55,6 +55,14 @@ let g:go_doc_auto_start = 0
 Then copy the server registration from `plugin/go_doc_lsp.vim` into your own
 Vim config and customize it.
 
+Disable go-doc for one project with `.go-doc/config.json`:
+
+```json
+{
+  "enabled": false
+}
+```
+
 ## Template Contracts
 
 Template contracts use `@model`:
@@ -65,3 +73,10 @@ Template contracts use `@model`:
 */}}
 {{ Page.Title }}
 ```
+
+## LSP Features
+
+The Vim package only registers the server. Completion, diagnostics, hover,
+go-to-definition, and document symbols come from `go-doc lsp`. The server
+understands `@model`, `@dot`, `@func`, range/with dot context, typed function
+returns, template includes, named defines, and block calls.

@@ -82,6 +82,14 @@ Then call:
 require("go-doc").start()
 ```
 
+Disable go-doc for one project with `.go-doc/config.json`:
+
+```json
+{
+  "enabled": false
+}
+```
+
 ## Template Contracts
 
 Template contracts use `@model`:
@@ -92,3 +100,10 @@ Template contracts use `@model`:
 */}}
 {{ Page.Title }}
 ```
+
+## LSP Features
+
+The Neovim package only starts the server. Completion, diagnostics, hover,
+go-to-definition, semantic tokens, and document symbols come from `go-doc lsp`.
+The server understands `@model`, `@dot`, `@func`, range/with dot context, typed
+function returns, template includes, named defines, and block calls.

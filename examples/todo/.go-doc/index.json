@@ -16,12 +16,24 @@
     "templates/todo_detail.gohtml": {
       "models": {
         "Todo": "github.com/donseba/go-doc/examples/todo.Todo"
+      },
+      "funcs": {
+        "add": "github.com/donseba/go-doc/examples/todo.Add",
+        "div": "github.com/donseba/go-doc/examples/todo.Div",
+        "mul": "github.com/donseba/go-doc/examples/todo.Mul",
+        "sub": "github.com/donseba/go-doc/examples/todo.Sub"
       }
     },
     "templates/todo_list.gohtml": {
       "models": {
         "Page": "github.com/donseba/go-doc/examples/todo.TodoPage",
         "User": "github.com/donseba/go-doc/examples/todo.User"
+      },
+      "funcs": {
+        "add": "github.com/donseba/go-doc/examples/todo.Add",
+        "div": "github.com/donseba/go-doc/examples/todo.Div",
+        "mul": "github.com/donseba/go-doc/examples/todo.Mul",
+        "sub": "github.com/donseba/go-doc/examples/todo.Sub"
       }
     }
   },
@@ -235,6 +247,524 @@
           "column": 15
         }
       }
+    },
+    "time.Duration": {
+      "name": "Duration",
+      "package": "time",
+      "file": "",
+      "fields": {},
+      "methods": {
+        "Abs": {
+          "type": "time.Duration",
+          "signature": "func() time.Duration",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1158,
+          "column": 1
+        },
+        "Hours": {
+          "type": "float64",
+          "signature": "func() float64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1104,
+          "column": 1
+        },
+        "Microseconds": {
+          "type": "int64",
+          "signature": "func() int64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1075,
+          "column": 1
+        },
+        "Milliseconds": {
+          "type": "int64",
+          "signature": "func() int64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1078,
+          "column": 1
+        },
+        "Minutes": {
+          "type": "float64",
+          "signature": "func() float64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1097,
+          "column": 1
+        },
+        "Nanoseconds": {
+          "type": "int64",
+          "signature": "func() int64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1072,
+          "column": 1
+        },
+        "Round": {
+          "type": "time.Duration",
+          "signature": "func(m time.Duration) time.Duration",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1131,
+          "column": 1,
+          "params": [
+            "time.Duration"
+          ]
+        },
+        "Seconds": {
+          "type": "float64",
+          "signature": "func() float64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1090,
+          "column": 1
+        },
+        "String": {
+          "type": "string",
+          "signature": "func() string",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 947,
+          "column": 1
+        },
+        "Truncate": {
+          "type": "time.Duration",
+          "signature": "func(m time.Duration) time.Duration",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1112,
+          "column": 1,
+          "params": [
+            "time.Duration"
+          ]
+        }
+      }
+    },
+    "time.Location": {
+      "name": "Location",
+      "package": "time",
+      "file": "",
+      "fields": {},
+      "methods": {
+        "String": {
+          "type": "string",
+          "signature": "func() string",
+          "file": "$GOROOT/src/time/zoneinfo.go",
+          "line": 103,
+          "column": 1
+        }
+      }
+    },
+    "time.Month": {
+      "name": "Month",
+      "package": "time",
+      "file": "",
+      "fields": {},
+      "methods": {
+        "String": {
+          "type": "string",
+          "signature": "func() string",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 342,
+          "column": 1
+        }
+      }
+    },
+    "time.Time": {
+      "name": "Time",
+      "package": "time",
+      "file": "",
+      "fields": {},
+      "methods": {
+        "Add": {
+          "type": "time.Time",
+          "signature": "func(d time.Duration) time.Time",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1170,
+          "column": 1,
+          "params": [
+            "time.Duration"
+          ]
+        },
+        "AddDate": {
+          "type": "time.Time",
+          "signature": "func(years int, months int, days int) time.Time",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1262,
+          "column": 1,
+          "params": [
+            "int",
+            "int",
+            "int"
+          ]
+        },
+        "After": {
+          "type": "bool",
+          "signature": "func(u time.Time) bool",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 271,
+          "column": 1,
+          "params": [
+            "time.Time"
+          ]
+        },
+        "AppendBinary": {
+          "type": "[]byte",
+          "signature": "func(b []byte) ([]byte, error)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1470,
+          "column": 1,
+          "params": [
+            "[]byte"
+          ]
+        },
+        "AppendFormat": {
+          "type": "[]byte",
+          "signature": "func(b []byte, layout string) []byte",
+          "file": "$GOROOT/src/time/format.go",
+          "line": 655,
+          "column": 1,
+          "params": [
+            "[]byte",
+            "string"
+          ]
+        },
+        "AppendText": {
+          "type": "[]byte",
+          "signature": "func(b []byte) ([]byte, error)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1630,
+          "column": 1,
+          "params": [
+            "[]byte"
+          ]
+        },
+        "Before": {
+          "type": "bool",
+          "signature": "func(u time.Time) bool",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 281,
+          "column": 1,
+          "params": [
+            "time.Time"
+          ]
+        },
+        "Clock": {
+          "signature": "func() (hour int, min int, sec int)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 870,
+          "column": 1
+        },
+        "Compare": {
+          "type": "int",
+          "signature": "func(u time.Time) int",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 292,
+          "column": 1,
+          "params": [
+            "time.Time"
+          ]
+        },
+        "Date": {
+          "signature": "func() (year int, month time.Month, day int)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 812,
+          "column": 1
+        },
+        "Day": {
+          "type": "int",
+          "signature": "func() int",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 831,
+          "column": 1
+        },
+        "Equal": {
+          "type": "bool",
+          "signature": "func(u time.Time) bool",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 316,
+          "column": 1,
+          "params": [
+            "time.Time"
+          ]
+        },
+        "Format": {
+          "type": "string",
+          "signature": "func(layout string) string",
+          "file": "$GOROOT/src/time/format.go",
+          "line": 639,
+          "column": 1,
+          "params": [
+            "string"
+          ]
+        },
+        "GoString": {
+          "type": "string",
+          "signature": "func() string",
+          "file": "$GOROOT/src/time/format.go",
+          "line": 577,
+          "column": 1
+        },
+        "GobDecode": {
+          "type": "error",
+          "signature": "func(data []byte) error",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1583,
+          "column": 1,
+          "params": [
+            "[]byte"
+          ]
+        },
+        "GobEncode": {
+          "type": "[]byte",
+          "signature": "func() ([]byte, error)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1578,
+          "column": 1
+        },
+        "Hour": {
+          "type": "int",
+          "signature": "func() int",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 885,
+          "column": 1
+        },
+        "ISOWeek": {
+          "signature": "func() (year int, week int)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 852,
+          "column": 1
+        },
+        "In": {
+          "type": "time.Time",
+          "signature": "func(loc *time.Location) time.Time",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1384,
+          "column": 1,
+          "params": [
+            "*time.Location"
+          ]
+        },
+        "IsDST": {
+          "type": "bool",
+          "signature": "func() bool",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1681,
+          "column": 1
+        },
+        "IsZero": {
+          "type": "bool",
+          "signature": "func() bool",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 262,
+          "column": 1
+        },
+        "Local": {
+          "type": "time.Time",
+          "signature": "func() time.Time",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1374,
+          "column": 1
+        },
+        "Location": {
+          "type": "*time.Location",
+          "signature": "func() *time.Location",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1393,
+          "column": 1
+        },
+        "MarshalBinary": {
+          "type": "[]byte",
+          "signature": "func() ([]byte, error)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1517,
+          "column": 1
+        },
+        "MarshalJSON": {
+          "type": "[]byte",
+          "signature": "func() ([]byte, error)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1591,
+          "column": 1
+        },
+        "MarshalText": {
+          "type": "[]byte",
+          "signature": "func() ([]byte, error)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1638,
+          "column": 1
+        },
+        "Minute": {
+          "type": "int",
+          "signature": "func() int",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 890,
+          "column": 1
+        },
+        "Month": {
+          "type": "time.Month",
+          "signature": "func() time.Month",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 824,
+          "column": 1
+        },
+        "Nanosecond": {
+          "type": "int",
+          "signature": "func() int",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 901,
+          "column": 1
+        },
+        "Round": {
+          "type": "time.Time",
+          "signature": "func(d time.Duration) time.Time",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1799,
+          "column": 1,
+          "params": [
+            "time.Duration"
+          ]
+        },
+        "Second": {
+          "type": "int",
+          "signature": "func() int",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 895,
+          "column": 1
+        },
+        "String": {
+          "type": "string",
+          "signature": "func() string",
+          "file": "$GOROOT/src/time/format.go",
+          "line": 546,
+          "column": 1
+        },
+        "Sub": {
+          "type": "time.Duration",
+          "signature": "func(u time.Time) time.Duration",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1198,
+          "column": 1,
+          "params": [
+            "time.Time"
+          ]
+        },
+        "Truncate": {
+          "type": "time.Time",
+          "signature": "func(d time.Duration) time.Time",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1782,
+          "column": 1,
+          "params": [
+            "time.Duration"
+          ]
+        },
+        "UTC": {
+          "type": "time.Time",
+          "signature": "func() time.Time",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1368,
+          "column": 1
+        },
+        "Unix": {
+          "type": "int64",
+          "signature": "func() int64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1432,
+          "column": 1
+        },
+        "UnixMicro": {
+          "type": "int64",
+          "signature": "func() int64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1450,
+          "column": 1
+        },
+        "UnixMilli": {
+          "type": "int64",
+          "signature": "func() int64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1441,
+          "column": 1
+        },
+        "UnixNano": {
+          "type": "int64",
+          "signature": "func() int64",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1460,
+          "column": 1
+        },
+        "UnmarshalBinary": {
+          "type": "error",
+          "signature": "func(data []byte) error",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1526,
+          "column": 1,
+          "params": [
+            "[]byte"
+          ]
+        },
+        "UnmarshalJSON": {
+          "type": "error",
+          "signature": "func(data []byte) error",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1604,
+          "column": 1,
+          "params": [
+            "[]byte"
+          ]
+        },
+        "UnmarshalText": {
+          "type": "error",
+          "signature": "func(data []byte) error",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1644,
+          "column": 1,
+          "params": [
+            "[]byte"
+          ]
+        },
+        "Weekday": {
+          "type": "time.Weekday",
+          "signature": "func() time.Weekday",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 838,
+          "column": 1
+        },
+        "Year": {
+          "type": "int",
+          "signature": "func() int",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 817,
+          "column": 1
+        },
+        "YearDay": {
+          "type": "int",
+          "signature": "func() int",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 907,
+          "column": 1
+        },
+        "Zone": {
+          "signature": "func() (name string, offset int)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1403,
+          "column": 1
+        },
+        "ZoneBounds": {
+          "signature": "func() (start time.Time, end time.Time)",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 1413,
+          "column": 1
+        }
+      }
+    },
+    "time.Weekday": {
+      "name": "Weekday",
+      "package": "time",
+      "file": "",
+      "fields": {},
+      "methods": {
+        "String": {
+          "type": "string",
+          "signature": "func() string",
+          "file": "$GOROOT/src/time/time.go",
+          "line": 365,
+          "column": 1
+        }
+      }
     }
   },
   "funcs": {
@@ -312,8 +842,20 @@
     }
   },
   "short": {
+    "Duration": [
+      "time.Duration"
+    ],
+    "Location": [
+      "time.Location"
+    ],
+    "Month": [
+      "time.Month"
+    ],
     "Test": [
       "github.com/donseba/go-doc/examples/todo.Test"
+    ],
+    "Time": [
+      "time.Time"
     ],
     "Todo": [
       "github.com/donseba/go-doc/examples/todo.Todo"
@@ -323,6 +865,9 @@
     ],
     "User": [
       "github.com/donseba/go-doc/examples/todo.User"
+    ],
+    "Weekday": [
+      "time.Weekday"
     ]
   }
 }

@@ -20,11 +20,9 @@ The app exposes:
 - `GET /todos/{id}` renders the same shell with another selected detail
 - `POST /todos/{id}/toggle` toggles the todo in memory and redirects back
 
-Generate the index from the repository root:
-
-```bash
-go run ./cmd/go-doc index -o examples/todo/.go-doc/index.json examples/todo
-```
+No generated index is required. The language server can scan this module in
+memory from `go.mod`. Generate `examples/todo/.go-doc/index.json` only when you
+want to inspect the discovered contracts on disk.
 
 Run the example:
 

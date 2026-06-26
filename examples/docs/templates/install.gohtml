@@ -14,7 +14,10 @@
     </tbody>
 </table>
 
-<h2>Generate an index</h2>
+<h2>No project files required</h2>
+<p>The editor integrations start <code>go-doc lsp</code>. The language server finds <code>go.mod</code>, scans the module in memory, and does not require a <code>.go-doc</code> folder.</p>
+
+<h2>Optional index file</h2>
+<p><code>.go-doc/index.json</code> is only needed when you explicitly want a generated artifact for CI, debugging, or other tools.</p>
 <pre><code>go-doc index -o .go-doc/index.json .</code></pre>
-<p>The command only writes an index when at least one template contains a contract annotation.</p>
 {{ end }}

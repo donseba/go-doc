@@ -3,8 +3,10 @@ package godoccli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -80,6 +82,38 @@ func TestLSPDiagnosticsIgnoreModelDeclarationAsTemplateCode(t *testing.T) {
 	if len(diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", diagnostics)
 	}
+}
+
+func TestLSPDiagnosticsCatchModelFunctionNameCollisions(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {Name: "Page"},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.Mul": {Name: "Mul"},
+		},
+	}}
+
+	builtIn := diagnosticsForText(`{{/*
+@model len example.com/app.Page
+*/}}`, idx, templateIndex{Models: map[string]string{"len": "example.com/app.Page"}})
+	assertDiagnostic(t, builtIn, "Model name 'len' collides with built-in template function 'len'")
+
+	global := diagnosticsForText(`{{/*
+@model mul example.com/app.Page
+*/}}`, idx, templateIndex{
+		Models: map[string]string{"mul": "example.com/app.Page"},
+		Funcs:  map[string]string{"mul": "example.com/app.Mul"},
+	})
+	assertDiagnostic(t, global, "Model name 'mul' collides with template function 'mul'")
+
+	localText := `{{/*
+@model mul example.com/app.Page
+@func mul example.com/app.Mul
+*/}}`
+	localContract := mergeInlineContract(localText, idx, templateIndex{})
+	local := diagnosticsForText(localText, idx, localContract)
+	assertDiagnostic(t, local, "Model name 'mul' collides with template function 'mul'")
 }
 
 func TestLSPTypeReferenceOnlyUsesDeclarationTail(t *testing.T) {
@@ -172,6 +206,9 @@ func TestLSPDiagnosticsValidateTemplateIncludeDotType(t *testing.T) {
 	invalidString := diagnosticsForText(`{{ template "user_row.gohtml" Page.Title }}`, idx, contract)
 	assertDiagnostic(t, invalidString, "Template user_row.gohtml expects User, got string")
 
+	missingData := diagnosticsForText(`{{ template "user_row.gohtml" }}`, idx, contract)
+	assertDiagnostic(t, missingData, "Template user_row.gohtml expects User, got no data")
+
 	validBlock := diagnosticsForText(`{{ range Page.Users }}{{ block "table_row" . }}{{ end }}{{ end }}`, idx, contract)
 	if len(validBlock) != 0 {
 		t.Fatalf("diagnostics = %#v, want valid named block include", validBlock)
@@ -247,6 +284,206 @@ func TestLSPTemplateIncludeHoverAndDefinition(t *testing.T) {
 	}
 }
 
+func TestLSPTemplateIncludePrefersSameFileDefine(t *testing.T) {
+	root := t.TempDir()
+	idx := lspIndex{rootPath: root, indexFile: indexFile{
+		Templates: map[string]templateIndex{
+			"templates/a.gohtml": {
+				Models: map[string]string{"Page": "example.com/app.Page"},
+			},
+			"templates/a.gohtml#row": {
+				Name:   "row",
+				Dot:    "example.com/app.User",
+				Source: "templates/a.gohtml",
+				Line:   9,
+				Column: 1,
+			},
+			"templates/b.gohtml#row": {
+				Name:   "row",
+				Dot:    "example.com/app.Project",
+				Source: "templates/b.gohtml",
+				Line:   4,
+				Column: 1,
+			},
+		},
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name: "Page",
+				Fields: map[string]fieldIndex{
+					"Title": {Type: "string"},
+					"Users": {Type: "[]User"},
+				},
+			},
+			"example.com/app.User":    {Name: "User", Fields: map[string]fieldIndex{"Name": {Type: "string"}}},
+			"example.com/app.Project": {Name: "Project", Fields: map[string]fieldIndex{"Name": {Type: "string"}}},
+		},
+		Short: map[string][]string{
+			"User":    {"example.com/app.User"},
+			"Project": {"example.com/app.Project"},
+		},
+	}}
+	text := `{{/*
+@model Page example.com/app.Page
+*/}}
+{{ range Page.Users }}
+    {{ template "row" . }}
+{{ end }}
+{{ template "row" Page.Title }}
+{{ define "row" }}{{/* @dot example.com/app.User */}}{{ .Name }}{{ end }}`
+	uri := uriFromPath(filepath.Join(root, "templates", "a.gohtml"))
+	server := &lspServer{root: root, idx: idx.indexFile, docs: map[string]string{uri: text}}
+	contract, ok := server.contractForURI(uri, idx)
+	if !ok {
+		t.Fatal("contractForURI() = false")
+	}
+
+	diagnostics := diagnosticsForTextScoped(text, idx, contract, "templates/a.gohtml")
+	assertDiagnostic(t, diagnostics, "Template row expects User, got string")
+	for _, item := range diagnostics {
+		if strings.Contains(item.Message, "Project") {
+			t.Fatalf("diagnostics = %#v, should prefer same-file User define over Project define", diagnostics)
+		}
+	}
+
+	pos := positionAt(text, strings.Index(text, `"row"`)+1)
+	hoverResult := server.hover(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     pos,
+	})
+	gotHover, ok := hoverResult.(hover)
+	if !ok {
+		t.Fatalf("hover result = %#v", hoverResult)
+	}
+	contents, ok := gotHover.Contents.(map[string]string)
+	if !ok || !strings.Contains(contents["value"], "Expects `User`.") {
+		t.Fatalf("hover contents = %#v, want same-file User define", gotHover.Contents)
+	}
+
+	definitionResult := server.definition(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     pos,
+	})
+	gotDefinition, ok := definitionResult.(location)
+	if !ok {
+		t.Fatalf("definition result = %#v", definitionResult)
+	}
+	if !strings.Contains(filepath.ToSlash(gotDefinition.URI), "templates/a.gohtml") || gotDefinition.Range.Start.Line != 7 {
+		t.Fatalf("definition = %#v, want same-file row define", gotDefinition)
+	}
+}
+
+func TestLSPTemplateIncludeDefineRegressionSweep(t *testing.T) {
+	root := t.TempDir()
+	idx := lspIndex{rootPath: root, indexFile: indexFile{
+		Templates: map[string]templateIndex{
+			"templates/table.gohtml": {
+				Models: map[string]string{"Page": "example.com/app.Page"},
+			},
+			"templates/user_row.gohtml": {
+				Dot: "example.com/app.User",
+			},
+			"templates/shared.gohtml#user_row": {
+				Name:   "user_row",
+				Dot:    "example.com/app.Project",
+				Source: "templates/shared.gohtml",
+				Line:   3,
+				Column: 1,
+			},
+			"templates/table.gohtml#inline_row": {
+				Name:   "inline_row",
+				Dot:    "example.com/app.User",
+				Source: "templates/table.gohtml",
+				Line:   12,
+				Column: 1,
+			},
+			"templates/blocks.gohtml#block_row": {
+				Name:   "block_row",
+				Dot:    "example.com/app.User",
+				Source: "templates/blocks.gohtml",
+				Line:   5,
+				Column: 1,
+			},
+		},
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name: "Page",
+				Fields: map[string]fieldIndex{
+					"Title":    {Type: "string"},
+					"Users":    {Type: "[]User"},
+					"Projects": {Type: "[]Project"},
+				},
+			},
+			"example.com/app.User":    {Name: "User", Fields: map[string]fieldIndex{"Name": {Type: "string"}}},
+			"example.com/app.Project": {Name: "Project", Fields: map[string]fieldIndex{"Name": {Type: "string"}}},
+		},
+		Short: map[string][]string{
+			"User":    {"example.com/app.User"},
+			"Project": {"example.com/app.Project"},
+		},
+	}}
+	contract := idx.Templates["templates/table.gohtml"]
+	tests := []struct {
+		name    string
+		text    string
+		message string
+	}{
+		{
+			name: "cross-file include with row dot",
+			text: `{{ range Page.Users }}{{ template "user_row.gohtml" . }}{{ end }}`,
+		},
+		{
+			name:    "cross-file include wrong slice",
+			text:    `{{ template "user_row.gohtml" Page.Users }}`,
+			message: "Template user_row.gohtml expects User, got []User",
+		},
+		{
+			name:    "cross-file include missing data",
+			text:    `{{ template "user_row.gohtml" }}`,
+			message: "Template user_row.gohtml expects User, got no data",
+		},
+		{
+			name: "same-file define include",
+			text: `{{ range Page.Users }}{{ template "inline_row" . }}{{ end }}
+{{ define "inline_row" }}{{/* @dot example.com/app.User */}}{{ .Name }}{{ end }}`,
+		},
+		{
+			name: "named block include",
+			text: `{{ range Page.Users }}{{ block "block_row" . }}fallback{{ end }}{{ end }}`,
+		},
+		{
+			name:    "block wrong dot",
+			text:    `{{ block "block_row" Page.Title }}fallback{{ end }}`,
+			message: "Template block_row expects User, got string",
+		},
+		{
+			name: "same-file duplicate define wins",
+			text: `{{ range Page.Users }}{{ template "user_row" . }}{{ end }}
+{{ template "user_row" Page.Title }}
+{{ define "user_row" }}{{/* @dot example.com/app.User */}}{{ .Name }}{{ end }}`,
+			message: "Template user_row expects User, got string",
+		},
+		{
+			name: "include without dot contract stays quiet",
+			text: `{{ template "unknown_or_untyped" Page.Title }}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diagnostics := diagnosticsForTextScoped(test.text, idx, contract, "templates/table.gohtml")
+			if test.message == "" {
+				if len(diagnostics) != 0 {
+					t.Fatalf("diagnostics = %#v, want none", diagnostics)
+				}
+				return
+			}
+			assertDiagnostic(t, diagnostics, test.message)
+			if strings.Contains(fmt.Sprint(diagnostics), "Project") {
+				t.Fatalf("diagnostics = %#v, should not pick duplicate Project contract", diagnostics)
+			}
+		})
+	}
+}
+
 func TestLSPWarnsAndMovesLeadingDefineContract(t *testing.T) {
 	text := `{{/*
 @dot example.com/app.User
@@ -281,8 +518,67 @@ func TestLSPWarnsAndMovesLeadingDefineContract(t *testing.T) {
 	if len(edits) != 2 {
 		t.Fatalf("edits = %#v, want delete and insert", edits)
 	}
-	if edits[1].NewText != "\n{{/*\n@dot example.com/app.User\n*/}}\n" {
+	if edits[1].NewText != "\n{{/* @dot example.com/app.User */}}\n" {
 		t.Fatalf("insert text = %q", edits[1].NewText)
+	}
+}
+
+func TestLSPUsesDefineContractInsideSameFileSections(t *testing.T) {
+	root := t.TempDir()
+	uri := uriFromPath(filepath.Join(root, "templates", "single_file.gohtml"))
+	text := `{{/*
+@model Page example.com/app.Page
+*/}}
+<h1>{{ Page.Title }}</h1>
+{{ define "user_row" }}
+{{/*
+@dot example.com/app.User
+*/}}
+<tr><td>{{ .Name }}</td></tr>
+{{ end }}`
+	idx := lspIndex{rootPath: root, indexFile: indexFile{
+		Templates: map[string]templateIndex{
+			"templates/single_file.gohtml":          {Models: map[string]string{"Page": "example.com/app.Page"}},
+			"templates/single_file.gohtml#user_row": {Name: "user_row", Dot: "example.com/app.User", Source: "templates/single_file.gohtml", Line: 4, Column: 1},
+		},
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {Name: "Page", Fields: map[string]fieldIndex{"Title": {Type: "string"}}},
+			"example.com/app.User": {Name: "User", Fields: map[string]fieldIndex{"Name": {Type: "string"}}},
+		},
+		Short: map[string][]string{"User": {"example.com/app.User"}},
+	}}
+	server := &lspServer{root: root, idx: idx.indexFile, docs: map[string]string{uri: text}}
+
+	topOffset := strings.Index(text, "Page.Title")
+	topContract, ok := server.contractForURIAt(uri, idx, topOffset)
+	if !ok || topContract.Models["Page"] != "example.com/app.Page" || topContract.Dot != "" {
+		t.Fatalf("top contract = %#v, %v; want page model without define dot", topContract, ok)
+	}
+
+	rowOffset := strings.Index(text, ".Name")
+	rowContract, ok := server.contractForURIAt(uri, idx, rowOffset)
+	if !ok || rowContract.Dot != "example.com/app.User" {
+		t.Fatalf("row contract = %#v, %v; want User dot", rowContract, ok)
+	}
+
+	if diagnostics := diagnosticsForTextScoped(text, idx, topContract, "templates/single_file.gohtml"); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want valid page and define sections", diagnostics)
+	}
+
+	ref, ok := fieldReferenceAt(text, rowOffset+len(".Name"), idx, rowContract)
+	if !ok || ref.ownerType != "example.com/app.User" || ref.fieldName != "Name" {
+		t.Fatalf("fieldReferenceAt() = %#v, %v; want User.Name", ref, ok)
+	}
+
+	tokens := semanticTokensForTextScoped(text, idx, topContract, "templates/single_file.gohtml")
+	foundName := false
+	for _, token := range tokens {
+		if token.tokenType == semanticField && text[token.start:token.start+token.length] == "Name" {
+			foundName = true
+		}
+	}
+	if !foundName {
+		t.Fatalf("tokens = %#v, want field token for define dot field", tokens)
 	}
 }
 
@@ -477,6 +773,119 @@ func TestLSPDiagnosticsUnderstandPipelineFunctionArguments(t *testing.T) {
 	}
 }
 
+func TestLSPDiagnosticsUseScopedDotForFunctionsLenAndPipelines(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name: "Page",
+				Fields: map[string]fieldIndex{
+					"Users": {Type: "[]User"},
+				},
+			},
+			"example.com/app.User": {
+				Name: "User",
+				Fields: map[string]fieldIndex{
+					"ID":          {Type: "int"},
+					"Name":        {Type: "string"},
+					"Permissions": {Type: "[]Permission"},
+				},
+			},
+			"example.com/app.Permission": {
+				Name: "Permission",
+			},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.UserLabel": {Name: "UserLabel", Result: "string", Params: []string{"User"}},
+			"example.com/app.Div":       {Name: "Div", Result: "int", Params: []string{"int", "int"}},
+		},
+		Short: map[string][]string{
+			"User":       {"example.com/app.User"},
+			"Permission": {"example.com/app.Permission"},
+		},
+	}}
+	contract := templateIndex{
+		Models: map[string]string{"Page": "example.com/app.Page"},
+		Funcs: map[string]string{
+			"userLabel": "example.com/app.UserLabel",
+			"div":       "example.com/app.Div",
+		},
+	}
+
+	valid := diagnosticsForText(`{{ range Page.Users }}
+{{ userLabel . }}
+{{ len .Permissions }}
+{{ .ID | div 2 }}
+{{ end }}`, idx, contract)
+	if len(valid) != 0 {
+		t.Fatalf("diagnostics = %#v, want scoped dot to satisfy function checks", valid)
+	}
+
+	invalid := diagnosticsForText(`{{ range Page.Users }}
+{{ div .Name 2 }}
+{{ .Name | div 2 }}
+{{ end }}`, idx, contract)
+	assertDiagnostic(t, invalid, "Cannot pass string to div argument 1 because it expects int")
+	assertDiagnostic(t, invalid, "Cannot pipe string to div argument 2 because it expects int")
+	if len(invalid) != 2 {
+		t.Fatalf("diagnostics = %#v, want two scoped function diagnostics", invalid)
+	}
+}
+
+func TestLSPDiagnosticsValidateNestedFunctionsPipelinesAndReturnShape(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name: "Page",
+				Fields: map[string]fieldIndex{
+					"Users": {Type: "[]User"},
+				},
+			},
+			"example.com/app.User": {
+				Name: "User",
+				Fields: map[string]fieldIndex{
+					"ID":   {Type: "int"},
+					"Name": {Type: "string"},
+				},
+			},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.Add":       {Name: "Add", Result: "int", Params: []string{"int", "int"}},
+			"example.com/app.Div":       {Name: "Div", Result: "int", Params: []string{"int", "int"}},
+			"example.com/app.UserByID":  {Name: "UserByID", Result: "User", Params: []string{"int"}},
+			"example.com/app.BadReturn": {Name: "BadReturn", Results: []string{"string", "bool"}, ReturnOK: true},
+		},
+		Short: map[string][]string{"User": {"example.com/app.User"}},
+	}}
+	contract := templateIndex{
+		Models: map[string]string{"Page": "example.com/app.Page"},
+		Funcs: map[string]string{
+			"add":       "example.com/app.Add",
+			"div":       "example.com/app.Div",
+			"userByID":  "example.com/app.UserByID",
+			"badReturn": "example.com/app.BadReturn",
+		},
+	}
+
+	valid := diagnosticsForText(`{{ add (div 8 2) 1 }}
+{{ range Page.Users }}{{ add .ID 1 }}{{ .ID | div 2 }}{{ end }}
+{{ (userByID (add 1 1)).Name }}`, idx, contract)
+	if len(valid) != 0 {
+		t.Fatalf("diagnostics = %#v, want nested, scoped, and parenthesized functions to be valid", valid)
+	}
+
+	invalid := diagnosticsForText(`{{ add (div 8 "two") 1 }}
+{{ add (badReturn) 1 }}
+{{ range Page.Users }}{{ .Name | div 2 }}{{ end }}
+{{ userByID "two" }}`, idx, contract)
+	assertDiagnostic(t, invalid, "Cannot pass string to div argument 2 because it expects int")
+	assertDiagnostic(t, invalid, "Function badReturn has unsupported template return values (string, bool); use one value or (value, error)")
+	assertDiagnostic(t, invalid, "Cannot pipe string to div argument 2 because it expects int")
+	assertDiagnostic(t, invalid, "Cannot pass string to userByID argument 1 because it expects int")
+	if len(invalid) != 4 {
+		t.Fatalf("diagnostics = %#v, want four function diagnostics", invalid)
+	}
+}
+
 func TestLSPDiagnosticsValidateFunctionReturnShape(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Funcs: map[string]goFuncIndex{
@@ -622,6 +1031,149 @@ func TestLSPUsesParenthesizedFunctionReturnWithArguments(t *testing.T) {
 	items := completionsForText(t, longText, idx, contract, strings.LastIndex(longText, ".")+1)
 	if len(items) != 2 {
 		t.Fatalf("items for long template = %#v, want User fields after parenthesized function call", items)
+	}
+}
+
+func TestLSPCompletesImportedNamedTypeMethods(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {
+				Name:   "Page",
+				File:   "page.go",
+				Line:   3,
+				Column: 6,
+				Fields: map[string]fieldIndex{
+					"GeneratedAt": {Type: "time.Time", File: "page.go", Line: 5, Column: 2},
+					"Todos":       {Type: "[]Todo", File: "page.go", Line: 9, Column: 2},
+				},
+			},
+			"example.com/app.Todo": {
+				Name: "Todo",
+				Fields: map[string]fieldIndex{
+					"DueAt": {Type: "time.Time", File: "todo.go", Line: 7, Column: 2},
+					"Title": {Type: "string"},
+				},
+			},
+			"time.Time": {
+				Name:   "Time",
+				Fields: map[string]fieldIndex{},
+				Methods: map[string]methodIndex{
+					"After":  {Type: "bool", Signature: "func (time.Time).After(u time.Time) bool", File: "$GOROOT/src/time/time.go", Line: 271, Column: 1, Params: []string{"time.Time"}},
+					"Format": {Type: "string", Signature: "func (time.Time).Format(layout string) string", File: "$GOROOT/src/time/format.go", Line: 639, Column: 1, Params: []string{"string"}},
+					"IsZero": {Type: "bool", Signature: "func (time.Time).IsZero() bool"},
+				},
+			},
+		},
+		Short: map[string][]string{"Todo": {"example.com/app.Todo"}},
+	}}
+	contract := templateIndex{
+		Models: map[string]string{"Page": "example.com/app.Page"},
+	}
+
+	text := `{{ range Page.Todos }}{{ .DueAt. }}{{ end }}`
+	items := completionsForText(t, text, idx, contract, strings.Index(text, ". }}")+1)
+	if !hasCompletionLabel(items, "Format") || !hasCompletionLabel(items, "IsZero") {
+		t.Fatalf("items = %#v, want time.Time method completions", items)
+	}
+
+	diagnostics := diagnosticsForText(`{{ range Page.Todos }}{{ .DueAt.After .DueAt }}{{ end }}`, idx, contract)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want valid time.Time method argument", diagnostics)
+	}
+	diagnostics = diagnosticsForText(`{{ range Page.Todos }}{{ .DueAt.After .Title }}{{ end }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Cannot pass string to After argument 1 because it expects time.Time")
+
+	chainText := `{{ range Page.Todos }}{{ .DueAt.After .DueAt }}{{ end }}`
+	ref, ok := fieldReferenceAt(chainText, strings.Index(chainText, "DueAt")+1, idx, contract)
+	if !ok || ref.ownerType != "example.com/app.Todo" || ref.fieldName != "DueAt" {
+		t.Fatalf("DueAt ref = %#v, %v; want Todo.DueAt", ref, ok)
+	}
+	ref, ok = fieldReferenceAt(chainText, strings.Index(chainText, "After")+1, idx, contract)
+	if !ok || ref.ownerType != "time.Time" || ref.fieldName != "After" {
+		t.Fatalf("After ref = %#v, %v; want time.Time.After", ref, ok)
+	}
+
+	uri := "file:///template.gohtml"
+	server := &lspServer{
+		root: "C:/project",
+		idx: indexFile{
+			Version:   idx.Version,
+			Module:    idx.Module,
+			Templates: map[string]templateIndex{"template.gohtml": contract},
+			Types:     idx.Types,
+			Funcs:     idx.Funcs,
+			Short:     idx.Short,
+		},
+		docs: map[string]string{uri: chainText},
+	}
+	hoverResult := server.hover(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     positionAt(chainText, strings.Index(chainText, "DueAt")+1),
+	})
+	if hoverResult == nil {
+		t.Fatal("hover(DueAt) = nil, want field hover")
+	}
+	definitionResult := server.definition(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     positionAt(chainText, strings.Index(chainText, "After")+1),
+	})
+	gotLocation, ok := definitionResult.(location)
+	if !ok || !strings.HasSuffix(gotLocation.URI, "/src/time/time.go") {
+		t.Fatalf("definition(After) = %#v, want time.Time source location", definitionResult)
+	}
+
+	formatText := `<p>Rendered at {{ Page.GeneratedAt.Format "15:04:05" }}.</p>`
+	server.docs[uri] = formatText
+	for _, name := range []string{"Page", "GeneratedAt", "Format"} {
+		hoverResult := server.hover(textDocumentPositionParams{
+			TextDocument: textDocumentIdentifier{URI: uri},
+			Position:     positionAt(formatText, strings.Index(formatText, name)+1),
+		})
+		if hoverResult == nil {
+			t.Fatalf("hover(%s) = nil, want symbol hover", name)
+		}
+		gotHover, ok := hoverResult.(hover)
+		if !ok {
+			t.Fatalf("hover(%s) = %#v, want hover response", name, hoverResult)
+		}
+		if got := textAtRange(formatText, gotHover.Range); got != name {
+			t.Fatalf("hover(%s) range = %q, want %q", name, got, name)
+		}
+	}
+	definitionResult = server.definition(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     positionAt(formatText, strings.Index(formatText, "Format")+1),
+	})
+	gotLocation, ok = definitionResult.(location)
+	if !ok || !strings.HasSuffix(gotLocation.URI, "/src/time/format.go") {
+		t.Fatalf("definition(Format) = %#v, want time.Format source location", definitionResult)
+	}
+
+	mulText := `<p>Projected review minutes: {{ mul (len Page.Todos) 5 }}.</p>`
+	server.docs[uri] = mulText
+	definitionResult = server.definition(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     positionAt(mulText, strings.Index(mulText, "Page")+1),
+	})
+	gotLocation, ok = definitionResult.(location)
+	if !ok || !strings.HasSuffix(gotLocation.URI, "/page.go") || gotLocation.Range.Start.Line != 2 {
+		t.Fatalf("definition(Page in nested call) = %#v, want Page type location", definitionResult)
+	}
+	definitionResult = server.definition(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     positionAt(mulText, strings.Index(mulText, "Todos")+1),
+	})
+	gotLocation, ok = definitionResult.(location)
+	if !ok || !strings.HasSuffix(gotLocation.URI, "/page.go") || gotLocation.Range.Start.Line != 8 {
+		t.Fatalf("definition(Todos in nested call) = %#v, want Todos field location", definitionResult)
+	}
+}
+
+func TestLocationForTargetExpandsGoRoot(t *testing.T) {
+	got := targetPath("C:/project", "$GOROOT/src/time/time.go")
+	want := filepath.Join(runtime.GOROOT(), "src", "time", "time.go")
+	if got != want {
+		t.Fatalf("targetPath($GOROOT) = %q, want %q", got, want)
 	}
 }
 
@@ -780,6 +1332,7 @@ type Todo struct {
 	if err := writeJSON(idx, filepath.Join(root, ".go-doc", "index.json")); err != nil {
 		t.Fatalf("writeJSON() error = %v", err)
 	}
+	writeTestFile(t, filepath.Join(root, ".go-doc", "config.json"), `{"index": true}`)
 	templateText := `{{ todo.DueLabel }}`
 	uri := uriFromPath(filepath.Join(root, "todo.gohtml"))
 	server := &lspServer{
@@ -930,8 +1483,8 @@ func TestLSPCompletionUsesRangeDotType(t *testing.T) {
 	contract := templateIndex{
 		Models: map[string]string{"page": "example.com/app.Page"},
 	}
-	text := `{{ range _.page.Items }}{{ . }}{{ end }}`
-	offset := len(`{{ range _.page.Items }}{{ .`)
+	text := `{{ range page.Items }}{{ . }}{{ end }}`
+	offset := len(`{{ range page.Items }}{{ .`)
 
 	target, ok := fieldTargetBeforeCaret(text, offset, idx, contract)
 	if !ok || target != "example.com/app.Todo" {
@@ -958,9 +1511,6 @@ func TestLSPCompletionOffersModelsInEmptyAction(t *testing.T) {
 	items := accessorCompletionItems(idx, contract, prefix)
 	if !hasCompletionLabel(items, "todo") || !hasCompletionLabel(items, "len") {
 		t.Fatalf("items = %#v, want todo and len", items)
-	}
-	if hasCompletionLabel(items, "_") {
-		t.Fatalf("items = %#v, did not expect hidden compatibility scope", items)
 	}
 }
 
@@ -1018,7 +1568,7 @@ func TestLSPDiagnosticsUseRangeDotType(t *testing.T) {
 	contract := templateIndex{
 		Models: map[string]string{"page": "example.com/app.Page"},
 	}
-	text := `{{ range _.page.Projects }}
+	text := `{{ range page.Projects }}
 {{ .ID }}
 <a href="/projects/{{ .ID }}">{{ .Label }}</a>
 <span>{{ .Status }}</span>
@@ -1106,6 +1656,7 @@ func TestLSPIndexForURIUsesNearestNestedIndex(t *testing.T) {
 	nested := filepath.Join(root, "examples", "todo")
 	writeTestFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n")
 	writeTestFile(t, filepath.Join(nested, "go.mod"), "module github.com/donseba/go-doc/examples/todo\n")
+	writeTestFile(t, filepath.Join(nested, ".go-doc", "config.json"), `{"index": true}`)
 	writeTestFile(t, filepath.Join(nested, "templates", "main.gohtml"), "")
 	if err := writeJSON(indexFile{
 		Version: 2,
@@ -1147,6 +1698,7 @@ func TestLSPDiagnosticsUseNestedIndexForDocument(t *testing.T) {
 {{ page.Title }}`
 	writeTestFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n")
 	writeTestFile(t, filepath.Join(nested, "go.mod"), "module github.com/donseba/go-doc/examples/todo\n")
+	writeTestFile(t, filepath.Join(nested, ".go-doc", "config.json"), `{"index": true}`)
 	writeTestFile(t, templatePath, text)
 	if err := writeJSON(indexFile{
 		Version: 2,
@@ -1189,6 +1741,7 @@ func TestLSPDiagnosticsRebuildWhenSourceNewerThanIndex(t *testing.T) {
 */}}
 {{ todo.Un }}`
 	writeTestFile(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
+	writeTestFile(t, filepath.Join(root, ".go-doc", "config.json"), `{"index": true}`)
 	writeTestFile(t, filepath.Join(root, "todo.go"), `package app
 
 type Todo struct {
@@ -1336,22 +1889,22 @@ func TestLSPCompletionUsesPointerSliceMapAndMethods(t *testing.T) {
 	contract := templateIndex{
 		Models: map[string]string{"page": "example.com/app.Page"},
 	}
-	text := `{{ range _.page.Items }}{{ . }}{{ end }}`
-	offset := len(`{{ range _.page.Items }}{{ .`)
+	text := `{{ range page.Items }}{{ . }}{{ end }}`
+	offset := len(`{{ range page.Items }}{{ .`)
 
 	target, ok := fieldTargetBeforeCaret(text, offset, idx, contract)
 	if !ok || target != "example.com/app.Todo" {
 		t.Fatalf("fieldTargetBeforeCaret(slice) = %q, %v", target, ok)
 	}
 
-	text = `{{ range _.page.ByID }}{{ . }}{{ end }}`
-	offset = len(`{{ range _.page.ByID }}{{ .`)
+	text = `{{ range page.ByID }}{{ . }}{{ end }}`
+	offset = len(`{{ range page.ByID }}{{ .`)
 	target, ok = fieldTargetBeforeCaret(text, offset, idx, contract)
 	if !ok || target != "example.com/app.Todo" {
 		t.Fatalf("fieldTargetBeforeCaret(map) = %q, %v", target, ok)
 	}
 
-	ref, ok := fieldReferenceAt(`{{ _.page.Items }}`, len(`{{ _.page.Items`), idx, contract)
+	ref, ok := fieldReferenceAt(`{{ page.Items }}`, len(`{{ page.Items`), idx, contract)
 	if !ok || ref.fieldName != "Items" {
 		t.Fatalf("fieldReferenceAt(field) = %#v, %v", ref, ok)
 	}
@@ -1361,7 +1914,7 @@ func TestLSPCompletionUsesPointerSliceMapAndMethods(t *testing.T) {
 	}
 }
 
-func TestLSPCompletesModelScopeModelsAndModelTypes(t *testing.T) {
+func TestLSPCompletesModelAccessorsAndModelTypes(t *testing.T) {
 	idx := indexFile{
 		Types: map[string]goTypeIndex{
 			"example.com/app.Page": {Name: "Page", Package: "example.com/app", Fields: map[string]fieldIndex{}},
@@ -1378,17 +1931,8 @@ func TestLSPCompletesModelScopeModelsAndModelTypes(t *testing.T) {
 		TextDocument: textDocumentIdentifier{URI: "file:///template.gohtml"},
 		Position:     position{Line: 0, Character: len(`{{ pa`)},
 	})
-	if len(items) != 1 || items[0].Label != "page" || items[0].InsertText != "page." {
+	if len(items) != 1 || items[0].Label != "page" || items[0].InsertText != "page" {
 		t.Fatalf("model completions = %#v", items)
-	}
-
-	server.docs["file:///template.gohtml"] = `{{ _.pa }}`
-	items = server.completions(textDocumentPositionParams{
-		TextDocument: textDocumentIdentifier{URI: "file:///template.gohtml"},
-		Position:     position{Line: 0, Character: len(`{{ _.pa`)},
-	})
-	if len(items) != 1 || items[0].Label != "page" || items[0].InsertText != "page." {
-		t.Fatalf("scope model completions = %#v", items)
 	}
 
 	server.docs["file:///template.gohtml"] = `{{/*
@@ -1421,27 +1965,78 @@ func TestLSPSemanticTokensHighlightModelAccessorAndField(t *testing.T) {
 	text := `{{/*
 @model page example.com/app.Page
 */}}
-{{ _.page.Title }}`
+{{ page.Title }}`
 
 	tokens := semanticTokensForText(text, idx, contract)
-	if len(tokens) != 4 {
-		t.Fatalf("len(tokens) = %d, want 4: %#v", len(tokens), tokens)
+	if len(tokens) != 3 {
+		t.Fatalf("len(tokens) = %d, want 3: %#v", len(tokens), tokens)
 	}
 	if tokens[0].tokenType != semanticType || text[tokens[0].start:tokens[0].start+tokens[0].length] != "Page" {
 		t.Fatalf("type token = %#v", tokens[0])
 	}
-	if tokens[1].tokenType != semanticAccessor || text[tokens[1].start:tokens[1].start+tokens[1].length] != "_" {
+	if tokens[1].tokenType != semanticAccessor || text[tokens[1].start:tokens[1].start+tokens[1].length] != "page" {
 		t.Fatalf("accessor token = %#v", tokens[1])
 	}
-	if tokens[2].tokenType != semanticType || text[tokens[2].start:tokens[2].start+tokens[2].length] != "page" {
-		t.Fatalf("scope model token = %#v", tokens[2])
-	}
-	if tokens[3].tokenType != semanticField || text[tokens[3].start:tokens[3].start+tokens[3].length] != "Title" {
-		t.Fatalf("field token = %#v", tokens[3])
+	if tokens[2].tokenType != semanticField || text[tokens[2].start:tokens[2].start+tokens[2].length] != "Title" {
+		t.Fatalf("field token = %#v", tokens[2])
 	}
 }
 
-func TestLSPDiagnosticsUnderstandModelScope(t *testing.T) {
+func TestLSPDiagnosticsClearAfterModelDeclarationIsFixed(t *testing.T) {
+	idx := indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.UserTablePage": {
+				Name: "UserTablePage",
+				Fields: map[string]fieldIndex{
+					"Title": {Type: "string"},
+				},
+			},
+		},
+		Short: map[string][]string{"UserTablePage": {"example.com/app.UserTablePage"}},
+	}
+	uri := "file:///single_file.gohtml"
+	invalid := `{{/* @model PageInf example.com/app.UserTablePage */}}
+<h1>{{ PageInfo.Title }}</h1>`
+	valid := strings.Replace(invalid, "PageInf ", "PageInfo ", 1)
+	var out bytes.Buffer
+	server := &lspServer{
+		root: ".",
+		idx:  idx,
+		docs: map[string]string{uri: invalid},
+		out:  &out,
+	}
+	if err := server.publishDiagnostics(uri); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Unknown go-doc accessor") {
+		t.Fatalf("initial diagnostics output = %q, want unknown accessor", out.String())
+	}
+
+	out.Reset()
+	change, err := json.Marshal(didChangeParams{
+		TextDocument: versionedTextDocumentIdentifier{URI: uri},
+		ContentChanges: []struct {
+			Range       *lspRange `json:"range,omitempty"`
+			RangeLength int       `json:"rangeLength,omitempty"`
+			Text        string    `json:"text"`
+		}{{Text: valid}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.handleNotification(rpcMessage{Method: "textDocument/didChange", Params: change}); err != nil {
+		t.Fatal(err)
+	}
+	output := out.String()
+	if !strings.Contains(output, `"diagnostics":[]`) {
+		t.Fatalf("didChange output = %q, want explicit diagnostic clear", output)
+	}
+	if strings.Contains(output, "Unknown go-doc accessor") {
+		t.Fatalf("didChange output = %q, still contains stale accessor diagnostic", output)
+	}
+}
+
+func TestLSPDiagnosticsUnderstandDirectModelAccess(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{
 			"example.com/app.Page": {
@@ -1462,24 +2057,18 @@ func TestLSPDiagnosticsUnderstandModelScope(t *testing.T) {
 	}}
 	contract := templateIndex{Models: map[string]string{"Page": "example.com/app.Page"}}
 
-	if got := diagnosticsForText(`{{ _.Page.Title }}`, idx, contract); len(got) != 0 {
-		t.Fatalf("diagnostics = %#v, want none", got)
-	}
 	if got := diagnosticsForText(`{{ Page.Title }}`, idx, contract); len(got) != 0 {
 		t.Fatalf("diagnostics = %#v, want direct model access to work", got)
 	}
 
-	diagnostics := diagnosticsForText(`{{ range _.Page.Title }}{{ end }}`, idx, contract)
-	assertDiagnostic(t, diagnostics, "Cannot range over '_.Page.Title' because it is string")
-
-	diagnostics = diagnosticsForText(`{{ _.Missing.Title }}`, idx, contract)
-	assertDiagnostic(t, diagnostics, "Unknown go-doc model 'Missing'")
+	diagnostics := diagnosticsForText(`{{ range Page.Title }}{{ end }}`, idx, contract)
+	assertDiagnostic(t, diagnostics, "Cannot range over 'Page.Title' because it is string")
 
 	diagnostics = diagnosticsForText(`{{ Missing.Title }}`, idx, contract)
 	assertDiagnostic(t, diagnostics, "Unknown go-doc accessor 'Missing'")
 }
 
-func TestLSPCompletionUsesModelScopeFields(t *testing.T) {
+func TestLSPCompletionUsesDirectModelFields(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{
 			"example.com/app.Page": {
@@ -1491,28 +2080,24 @@ func TestLSPCompletionUsesModelScopeFields(t *testing.T) {
 		},
 	}}
 	contract := templateIndex{Models: map[string]string{"Page": "example.com/app.Page"}}
-	text := `{{ _.Page. }}`
-	offset := len(`{{ _.Page.`)
+	text := `{{ Page. }}`
+	offset := len(`{{ Page.`)
 
 	target, ok := fieldTargetBeforeCaret(text, offset, idx, contract)
 	if !ok || target != "example.com/app.Page" {
 		t.Fatalf("fieldTargetBeforeCaret() = %q, %v", target, ok)
 	}
-	ref, ok := fieldReferenceAt(`{{ _.Page.Title }}`, len(`{{ _.Page.Title`), idx, contract)
+	ref, ok := fieldReferenceAt(`{{ Page.Title }}`, len(`{{ Page.Title`), idx, contract)
 	if !ok || ref.ownerType != "example.com/app.Page" || ref.fieldName != "Title" {
 		t.Fatalf("fieldReferenceAt() = %#v, %v", ref, ok)
 	}
-	items := scopeModelCompletionItems(idx, contract, "Pa")
-	if len(items) != 1 || items[0].Label != "Page" {
-		t.Fatalf("scopeModelCompletionItems() = %#v", items)
-	}
-	items = accessorCompletionItems(idx, contract, "Pa")
-	if len(items) != 1 || items[0].Label != "Page" || items[0].InsertText != "Page." {
+	items := accessorCompletionItems(idx, contract, "Pa")
+	if len(items) != 1 || items[0].Label != "Page" || items[0].InsertText != "Page" {
 		t.Fatalf("accessorCompletionItems() = %#v", items)
 	}
 }
 
-func TestLSPModelScopeDrivesRangeDotType(t *testing.T) {
+func TestLSPDirectModelDrivesRangeDotType(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{
 			"example.com/app.Page": {
@@ -1527,7 +2112,7 @@ func TestLSPModelScopeDrivesRangeDotType(t *testing.T) {
 		Short: map[string][]string{"Todo": {"example.com/app.Todo"}},
 	}}
 	contract := templateIndex{Models: map[string]string{"Page": "example.com/app.Page"}}
-	text := `{{ range _.Page.Items }}{{ .Title }}{{ end }}`
+	text := `{{ range Page.Items }}{{ .Title }}{{ end }}`
 	offset := strings.Index(text, ".Title") + len(".Title")
 
 	ref, ok := fieldReferenceAt(text, offset, idx, contract)
@@ -1575,7 +2160,7 @@ func TestLSPHoverReturnsSourceRange(t *testing.T) {
 	text := `{{/*
 @model page example.com/app.Page
 */}}
-{{ _.page.Title }}`
+{{ page.Title }}`
 	server := &lspServer{root: ".", idx: idx, docs: map[string]string{"file:///template.gohtml": text}}
 	result := server.hover(textDocumentPositionParams{
 		TextDocument: textDocumentIdentifier{URI: "file:///template.gohtml"},
@@ -1585,7 +2170,7 @@ func TestLSPHoverReturnsSourceRange(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover result = %#v", result)
 	}
-	if got.Range.Start.Line != 3 || got.Range.Start.Character != 10 || got.Range.End.Character != 15 {
+	if got.Range.Start.Line != 3 || got.Range.Start.Character != 8 || got.Range.End.Character != 13 {
 		t.Fatalf("hover range = %#v", got.Range)
 	}
 }
@@ -1645,8 +2230,8 @@ func TestLSPInlineModelContractReplacesIndexedNames(t *testing.T) {
 	text := `{{/*
 @model BLA example.com/app.Page
 */}}
-{{ _.BLA.Title }}
-{{ _.TODO.Title }}`
+{{ BLA.Title }}
+{{ TODO.Title }}`
 	server := &lspServer{
 		root: ".",
 		idx:  idx.indexFile,
@@ -1668,7 +2253,7 @@ func TestLSPInlineModelContractReplacesIndexedNames(t *testing.T) {
 	if len(diagnostics) != 1 {
 		t.Fatalf("diagnostics = %#v, want one stale TODO diagnostic", diagnostics)
 	}
-	assertDiagnostic(t, diagnostics, "Unknown go-doc model 'TODO'")
+	assertDiagnostic(t, diagnostics, "Unknown go-doc accessor 'TODO'")
 }
 
 func TestLSPRenameModelNameUpdatesDeclarationAndScopeReferences(t *testing.T) {
@@ -1688,7 +2273,6 @@ func TestLSPRenameModelNameUpdatesDeclarationAndScopeReferences(t *testing.T) {
 	text := `{{/*
 @model page example.com/app.Page
 */}}
-{{ _.page.Title }}
 {{ page.Title }}`
 	uri := "file:///page.gohtml"
 	server := &lspServer{root: ".", idx: idx, docs: map[string]string{uri: text}}
@@ -1703,16 +2287,13 @@ func TestLSPRenameModelNameUpdatesDeclarationAndScopeReferences(t *testing.T) {
 		t.Fatalf("rename result = %#v, want workspaceEdit", result)
 	}
 	edits := edit.Changes[uri]
-	if len(edits) != 3 {
-		t.Fatalf("len(edits) = %d, want 3: %#v", len(edits), edits)
+	if len(edits) != 2 {
+		t.Fatalf("len(edits) = %d, want 2: %#v", len(edits), edits)
 	}
 
 	renamed := applyTextEdits(text, edits)
 	if !strings.Contains(renamed, "@model something example.com/app.Page") {
 		t.Fatalf("renamed text missing declaration:\n%s", renamed)
-	}
-	if !strings.Contains(renamed, "{{ _.something.Title }}") {
-		t.Fatalf("renamed text missing scoped use:\n%s", renamed)
 	}
 	if !strings.Contains(renamed, "{{ something.Title }}") {
 		t.Fatalf("renamed text missing direct use:\n%s", renamed)
@@ -1743,8 +2324,8 @@ func TestLSPCompletionUsesAssignedVariableType(t *testing.T) {
 	contract := templateIndex{
 		Models: map[string]string{"page": "example.com/app.Page"},
 	}
-	text := `{{ $todo := _.page.Current }}{{ $todo. }}`
-	offset := len(`{{ $todo := _.page.Current }}{{ $todo.`)
+	text := `{{ $todo := page.Current }}{{ $todo. }}`
+	offset := len(`{{ $todo := page.Current }}{{ $todo.`)
 
 	target, ok := fieldTargetBeforeCaret(text, offset, idx, contract)
 	if !ok || target != "example.com/app.Todo" {
@@ -1789,6 +2370,15 @@ func completionsForText(t *testing.T, text string, idx lspIndex, contract templa
 		TextDocument: textDocumentIdentifier{URI: uri},
 		Position:     positionAt(text, offset),
 	})
+}
+
+func textAtRange(text string, rng lspRange) string {
+	start := offsetAt(text, rng.Start)
+	end := offsetAt(text, rng.End)
+	if start < 0 || end < start || end > len(text) {
+		return ""
+	}
+	return text[start:end]
 }
 
 func writeTestFile(t *testing.T, path, content string) {

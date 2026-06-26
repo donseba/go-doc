@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -59,12 +60,13 @@ type (
 	}
 
 	methodIndex struct {
-		Type      string `json:"type,omitempty"`
-		Signature string `json:"signature,omitempty"`
-		Doc       string `json:"doc,omitempty"`
-		File      string `json:"file,omitempty"`
-		Line      int    `json:"line,omitempty"`
-		Column    int    `json:"column,omitempty"`
+		Type      string   `json:"type,omitempty"`
+		Signature string   `json:"signature,omitempty"`
+		Doc       string   `json:"doc,omitempty"`
+		File      string   `json:"file,omitempty"`
+		Line      int      `json:"line,omitempty"`
+		Column    int      `json:"column,omitempty"`
+		Params    []string `json:"params,omitempty"`
 	}
 
 	goFuncIndex struct {
@@ -87,8 +89,11 @@ type (
 	}
 
 	indexConfig struct {
-		Include []string `json:"include"`
-		Exclude []string `json:"exclude"`
+		Include    []string          `json:"include"`
+		Exclude    []string          `json:"exclude"`
+		Functions  map[string]string `json:"functions"`
+		Enabled    *bool             `json:"enabled"`
+		WriteIndex bool              `json:"index"`
 	}
 )
 
@@ -96,6 +101,7 @@ var (
 	modelPattern                  = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
 	dotPattern                    = regexp.MustCompile(`(?m)^\s*@dot\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
 	funcPattern                   = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
+	templateCommentPattern        = regexp.MustCompile(`(?s)\{\{/\*(.*?)\*/\}\}`)
 	definePattern                 = regexp.MustCompile(`(?s)\{\{\s*(?:-)?\s*define\s+"([^"]+)"\s*(?:-)?\s*\}\}(.*?)\{\{\s*(?:-)?\s*end\s*(?:-)?\s*\}\}`)
 	leadingTemplateCommentPattern = regexp.MustCompile(`(?s)\{\{/\*.*?\*/\}\}\s*$`)
 )
@@ -143,6 +149,10 @@ func Run(args []string) error {
 	}
 
 	switch args[0] {
+	case "version", "--version", "-version":
+		fmt.Fprintln(os.Stdout, Version)
+		return nil
+
 	case "types":
 		fs := flag.NewFlagSet("types", flag.ExitOnError)
 		query := fs.String("query", "", "filter structs by name or fully qualified type")
@@ -211,7 +221,8 @@ func usage() error {
   go-doc types [-query Todo] [root]
   go-doc templates [root]
   go-doc index [-o .go-doc/index.json] [root]
-  go-doc lsp [root]`)
+  go-doc lsp [root]
+  go-doc version`)
 }
 
 func argRoot(args []string) string {
@@ -236,14 +247,8 @@ func buildIndexWithMode(root string, requireTemplateModels bool) (indexFile, boo
 		return indexFile{}, false, err
 	}
 
-	module, err := readModulePath(absRoot)
-	if err != nil {
-		return indexFile{}, false, err
-	}
-
 	idx := indexFile{
 		Version:   2,
-		Module:    module,
 		Templates: make(map[string]templateIndex),
 		Types:     make(map[string]goTypeIndex),
 		Funcs:     make(map[string]goFuncIndex),
@@ -251,6 +256,16 @@ func buildIndexWithMode(root string, requireTemplateModels bool) (indexFile, boo
 	}
 
 	cfg := loadIndexConfig(absRoot)
+	if !cfg.enabled() {
+		return idx, false, nil
+	}
+
+	module, err := readModulePath(absRoot)
+	if err != nil {
+		return indexFile{}, false, err
+	}
+	idx.Module = module
+
 	if err := scanTemplates(absRoot, cfg, &idx); err != nil {
 		return indexFile{}, false, err
 	}
@@ -364,7 +379,7 @@ func indexPackageTypeDecl(root string, fileSet *token.FileSet, pkg *packages.Pac
 			Line:    position.Line,
 			Column:  position.Column,
 			Doc:     docText(firstDoc(typeSpec.Doc, decl.Doc)),
-			Fields:  exportedTypedFields(root, fileSet, pkg, structType, typeSpec),
+			Fields:  exportedTypedFields(root, fileSet, pkg, idx, structType, typeSpec),
 			Methods: make(map[string]methodIndex),
 		}
 		idx.Short[obj.Name()] = append(idx.Short[obj.Name()], fullName)
@@ -405,11 +420,13 @@ func indexPackageFuncDecl(root string, fileSet *token.FileSet, pkg *packages.Pac
 			File:      rel(root, position.Filename),
 			Line:      position.Line,
 			Column:    position.Column,
+			Params:    signatureParams(sig, pkg.Types),
 		}
 		idx.Types[fullTypeName] = typ
 		return
 	}
 	results := signatureResults(sig, pkg.Types)
+	indexReachableTypes(root, fileSet, idx, pkg.Types, sig, nil)
 	idx.Funcs[qualifiedObjectName(obj)] = goFuncIndex{
 		Name:      obj.Name(),
 		Package:   obj.Pkg().Path(),
@@ -451,7 +468,7 @@ func receiverNamed(typ types.Type) *types.Named {
 	}
 }
 
-func exportedTypedFields(root string, fileSet *token.FileSet, pkg *packages.Package, structType *types.Struct, typeSpec *ast.TypeSpec) map[string]fieldIndex {
+func exportedTypedFields(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, structType *types.Struct, typeSpec *ast.TypeSpec) map[string]fieldIndex {
 	metadata := astFieldMetadata(root, fileSet, typeSpec)
 	fields := make(map[string]fieldIndex)
 	for i := range structType.NumFields() {
@@ -467,9 +484,147 @@ func exportedTypedFields(root string, fileSet *token.FileSet, pkg *packages.Pack
 			meta.Column = position.Column
 		}
 		meta.Type = typeString(field.Type(), pkg.Types)
+		indexReachableTypes(root, fileSet, idx, pkg.Types, field.Type(), nil)
 		fields[field.Name()] = meta
 	}
 	return fields
+}
+
+func indexReachableTypes(root string, fileSet *token.FileSet, idx *indexFile, current *types.Package, typ types.Type, seen map[string]bool) {
+	if typ == nil {
+		return
+	}
+	if seen == nil {
+		seen = make(map[string]bool)
+	}
+	switch t := types.Unalias(typ).(type) {
+	case *types.Basic:
+		return
+	case *types.Pointer:
+		indexReachableTypes(root, fileSet, idx, current, t.Elem(), seen)
+	case *types.Slice:
+		indexReachableTypes(root, fileSet, idx, current, t.Elem(), seen)
+	case *types.Array:
+		indexReachableTypes(root, fileSet, idx, current, t.Elem(), seen)
+	case *types.Map:
+		indexReachableTypes(root, fileSet, idx, current, t.Key(), seen)
+		indexReachableTypes(root, fileSet, idx, current, t.Elem(), seen)
+	case *types.Chan:
+		indexReachableTypes(root, fileSet, idx, current, t.Elem(), seen)
+	case *types.Signature:
+		indexReachableTuple(root, fileSet, idx, current, t.Params(), seen)
+		indexReachableTuple(root, fileSet, idx, current, t.Results(), seen)
+	case *types.Named:
+		indexReachableNamedType(root, fileSet, idx, current, t, seen)
+		for i := range t.TypeArgs().Len() {
+			indexReachableTypes(root, fileSet, idx, current, t.TypeArgs().At(i), seen)
+		}
+		indexReachableTypes(root, fileSet, idx, current, t.Underlying(), seen)
+	case *types.Struct:
+		for i := range t.NumFields() {
+			field := t.Field(i)
+			if field.Exported() {
+				indexReachableTypes(root, fileSet, idx, current, field.Type(), seen)
+			}
+		}
+	case *types.Interface:
+		for i := range t.NumExplicitMethods() {
+			indexReachableTypes(root, fileSet, idx, current, t.ExplicitMethod(i).Type(), seen)
+		}
+	}
+}
+
+func indexReachableTuple(root string, fileSet *token.FileSet, idx *indexFile, current *types.Package, tuple *types.Tuple, seen map[string]bool) {
+	if tuple == nil {
+		return
+	}
+	for i := range tuple.Len() {
+		indexReachableTypes(root, fileSet, idx, current, tuple.At(i).Type(), seen)
+	}
+}
+
+func indexReachableNamedType(root string, fileSet *token.FileSet, idx *indexFile, current *types.Package, named *types.Named, seen map[string]bool) {
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil || !obj.Exported() {
+		return
+	}
+	if current != nil && obj.Pkg().Path() == current.Path() {
+		return
+	}
+	key := typeString(named, current)
+	if key == "" || seen[key] {
+		return
+	}
+	seen[key] = true
+
+	typ, ok := idx.Types[key]
+	if !ok {
+		typ = goTypeIndex{
+			Name:    obj.Name(),
+			Package: obj.Pkg().Path(),
+			Fields:  exportedExternalFields(root, fileSet, idx, current, named, seen),
+			Methods: make(map[string]methodIndex),
+		}
+		if typ.Fields == nil {
+			typ.Fields = make(map[string]fieldIndex)
+		}
+	} else if typ.Methods == nil {
+		typ.Methods = make(map[string]methodIndex)
+	}
+
+	addMethodSet(root, fileSet, idx, current, typ.Methods, types.NewMethodSet(named), seen)
+	addMethodSet(root, fileSet, idx, current, typ.Methods, types.NewMethodSet(types.NewPointer(named)), seen)
+	idx.Types[key] = typ
+	if !slices.Contains(idx.Short[obj.Name()], key) {
+		idx.Short[obj.Name()] = append(idx.Short[obj.Name()], key)
+	}
+}
+
+func exportedExternalFields(root string, fileSet *token.FileSet, idx *indexFile, current *types.Package, named *types.Named, seen map[string]bool) map[string]fieldIndex {
+	structType, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return nil
+	}
+	fields := make(map[string]fieldIndex)
+	for i := range structType.NumFields() {
+		field := structType.Field(i)
+		if !field.Exported() {
+			continue
+		}
+		fieldType := typeString(field.Type(), current)
+		fields[field.Name()] = fieldIndex{Type: fieldType}
+		indexReachableTypes(root, fileSet, idx, current, field.Type(), seen)
+	}
+	return fields
+}
+
+func addMethodSet(root string, fileSet *token.FileSet, idx *indexFile, current *types.Package, methods map[string]methodIndex, methodSet *types.MethodSet, seen map[string]bool) {
+	for i := range methodSet.Len() {
+		method, ok := methodSet.At(i).Obj().(*types.Func)
+		if !ok || !method.Exported() {
+			continue
+		}
+		if _, exists := methods[method.Name()]; exists {
+			continue
+		}
+		sig, ok := method.Type().(*types.Signature)
+		if !ok {
+			continue
+		}
+		results := signatureResults(sig, current)
+		indexed := methodIndex{
+			Type:      templateValueResultType(results),
+			Signature: types.TypeString(sig, typeQualifier(current)),
+			Params:    signatureParams(sig, current),
+		}
+		if position := fileSet.Position(method.Pos()); position.IsValid() && position.Filename != "" {
+			indexed.File = rel(root, position.Filename)
+			indexed.Line = position.Line
+			indexed.Column = position.Column
+		}
+		methods[method.Name()] = indexed
+		indexReachableTypes(root, fileSet, idx, current, sig, seen)
+	}
 }
 
 func astFieldMetadata(root string, fileSet *token.FileSet, typeSpec *ast.TypeSpec) map[string]fieldIndex {
@@ -568,9 +723,9 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 		src := string(data)
 		models := parseModels(src)
 		dot := parseDot(src)
-		funcs := parseFuncs(src)
+		funcs := contractFuncs(cfg.Functions, parseFuncs(src))
 		if len(models) == 0 && dot == "" && len(funcs) == 0 {
-			scanTemplateDefines(root, path, src, idx)
+			scanTemplateDefines(root, path, src, cfg, idx)
 			return nil
 		}
 
@@ -579,18 +734,18 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 			Dot:    dot,
 			Funcs:  funcs,
 		}
-		scanTemplateDefines(root, path, src, idx)
+		scanTemplateDefines(root, path, src, cfg, idx)
 		return nil
 	})
 }
 
-func scanTemplateDefines(root, path, src string, idx *indexFile) {
+func scanTemplateDefines(root, path, src string, cfg indexConfig, idx *indexFile) {
 	for _, match := range definePattern.FindAllStringSubmatchIndex(src, -1) {
 		name := src[match[2]:match[3]]
 		body := defineContractText(src, match[0], match[4], match[5])
 		models := parseModels(body)
 		dot := parseDot(body)
-		funcs := parseFuncs(body)
+		funcs := contractFuncs(cfg.Functions, parseFuncs(body))
 		if len(models) == 0 && dot == "" && len(funcs) == 0 {
 			continue
 		}
@@ -621,6 +776,7 @@ func defineContractText(src string, defineStart, bodyStart, bodyEnd int) string 
 }
 
 func hasContractAnnotations(src string) bool {
+	src = contractScanText(src)
 	return modelPattern.MatchString(src) || dotPattern.MatchString(src) || funcPattern.MatchString(src)
 }
 
@@ -642,6 +798,7 @@ func lineColumn(src string, offset int) (int, int) {
 }
 
 func parseModels(src string) map[string]string {
+	src = contractScanText(src)
 	models := make(map[string]string)
 	for _, match := range modelPattern.FindAllStringSubmatch(src, -1) {
 		models[match[1]] = normalizeType(match[2])
@@ -650,6 +807,7 @@ func parseModels(src string) map[string]string {
 }
 
 func parseDot(src string) string {
+	src = contractScanText(src)
 	match := dotPattern.FindStringSubmatch(src)
 	if len(match) != 2 {
 		return ""
@@ -658,11 +816,46 @@ func parseDot(src string) string {
 }
 
 func parseFuncs(src string) map[string]string {
+	src = contractScanText(src)
 	funcs := make(map[string]string)
 	for _, match := range funcPattern.FindAllStringSubmatch(src, -1) {
 		funcs[match[1]] = normalizeType(match[2])
 	}
 	return funcs
+}
+
+func contractFuncs(defaults, local map[string]string) map[string]string {
+	if len(defaults) == 0 && len(local) == 0 {
+		return nil
+	}
+	funcs := make(map[string]string, len(defaults)+len(local))
+	for name, fn := range defaults {
+		funcs[name] = normalizeType(fn)
+	}
+	for name, fn := range local {
+		funcs[name] = normalizeType(fn)
+	}
+	return funcs
+}
+
+func contractScanText(src string) string {
+	matches := templateCommentPattern.FindAllStringSubmatch(src, -1)
+	if len(matches) == 0 {
+		return src
+	}
+	var out strings.Builder
+	for _, match := range matches {
+		body := strings.TrimSpace(match[1])
+		if body == "" {
+			continue
+		}
+		out.WriteString(body)
+		out.WriteByte('\n')
+	}
+	if out.Len() == 0 {
+		return src
+	}
+	return out.String()
 }
 
 func normalizeType(typ string) string {
@@ -723,7 +916,7 @@ func validateTemplateTypes(idx *indexFile) {
 
 func hasTemplateModels(idx indexFile) bool {
 	for _, tmpl := range idx.Templates {
-		if len(tmpl.Models) > 0 || tmpl.Dot != "" {
+		if len(tmpl.Models) > 0 || tmpl.Dot != "" || len(tmpl.Funcs) > 0 {
 			return true
 		}
 	}
@@ -797,6 +990,10 @@ func loadIndexConfig(root string) indexConfig {
 		cfg.Include = []string{"/"}
 	}
 	return cfg
+}
+
+func (cfg indexConfig) enabled() bool {
+	return cfg.Enabled == nil || *cfg.Enabled
 }
 
 func shouldSkipDir(root, path, name string, cfg indexConfig) bool {

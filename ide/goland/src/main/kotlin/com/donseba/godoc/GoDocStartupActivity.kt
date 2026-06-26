@@ -16,18 +16,18 @@ class GoDocStartupActivity : ProjectActivity {
         val basePath = project.basePath ?: return
         val root = GoDocIndexer.findModuleRoot(basePath) ?: File(basePath)
         if (!File(root, "go.mod").isFile) return
-        if (File(root, ".go-doc/index.json").isFile) return
+        if (!GoDocIndexer.enabled(project, root)) return
 
         object : Task.Backgroundable(project, "Building go-doc index", false) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.text = "Running go-doc index"
-                val outDir = File(root, ".go-doc")
-                val outFile = File(outDir, "index.json")
-                outDir.mkdirs()
+                val outFile = GoDocIndexer.indexTarget(project, root)
+                if (GoDocIndexer.autoIndexEnabled(project, root) && outFile.isFile) return
+                outFile.parentFile.mkdirs()
                 val result = GoDocIndexer.run(root, outFile)
                 if (result.exitCode != 0) {
                     if (result.missingGoDoc) {
-                        GoDocCliInstaller.offerInstallAndIndex(project, root, outFile, ".go-doc/index.json created")
+                        GoDocCliInstaller.offerInstallAndIndex(project, root, outFile, indexMessage(root, outFile))
                         return
                     }
                     notify(project, "go-doc index not built", result.stderr.ifBlank { result.stdout }, NotificationType.WARNING)
@@ -36,11 +36,15 @@ class GoDocStartupActivity : ProjectActivity {
                 ApplicationManager.getApplication().invokeLater {
                     GoDocIndex.refreshVirtualIndex(project)
                     if (outFile.isFile) {
-                        notify(project, "go-doc index built", ".go-doc/index.json created", NotificationType.INFORMATION)
+                        notify(project, "go-doc index built", indexMessage(root, outFile), NotificationType.INFORMATION)
                     }
                 }
             }
         }.queue()
+    }
+
+    private fun indexMessage(root: File, outFile: File): String {
+        return if (outFile.path.startsWith(root.path)) ".go-doc/index.json created" else "go-doc shadow index created"
     }
 
     private fun notify(project: Project, title: String, content: String, type: NotificationType) {
