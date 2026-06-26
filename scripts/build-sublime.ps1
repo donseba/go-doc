@@ -3,11 +3,10 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root "dist"
 $source = Join-Path $root "ide\sublime"
-$versionLine = Select-String -Path (Join-Path $root "internal\godoccli\version.go") -Pattern '^const Version = "([^"]+)"' | Select-Object -First 1
-if (-not $versionLine) {
-    throw "could not resolve go-doc version"
+$version = (Get-Content (Join-Path $root "ide\vscode\package.json") | ConvertFrom-Json).version
+if (-not $version) {
+    throw "could not resolve go-doc package version"
 }
-$version = $versionLine.Matches[0].Groups[1].Value
 $out = Join-Path $dist "go-doc-sublime-$version.sublime-package"
 $zipOut = Join-Path $dist "go-doc-sublime-$version.zip"
 

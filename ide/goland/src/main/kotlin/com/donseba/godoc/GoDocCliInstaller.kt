@@ -40,6 +40,7 @@ object GoDocCliInstaller {
 
                     ApplicationManager.getApplication().invokeLater {
                         GoDocIndex.refreshVirtualIndex(project)
+                        GoDocEditorRefresh.refresh(project)
                         if (outFile.isFile) {
                             notify(project, "go-doc index rebuilt", successMessage, NotificationType.INFORMATION)
                         } else {

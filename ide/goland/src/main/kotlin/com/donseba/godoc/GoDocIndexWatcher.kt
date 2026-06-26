@@ -54,6 +54,7 @@ object GoDocIndexWatcher {
 
                 ApplicationManager.getApplication().invokeLater {
                     GoDocIndex.refreshVirtualIndex(project)
+                    GoDocEditorRefresh.refresh(project)
                 }
             },
             debounceMillis,
