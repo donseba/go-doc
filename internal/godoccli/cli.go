@@ -517,6 +517,13 @@ func indexReachableTypes(root string, fileSet *token.FileSet, idx *indexFile, cu
 		indexReachableTuple(root, fileSet, idx, current, t.Params(), seen)
 		indexReachableTuple(root, fileSet, idx, current, t.Results(), seen)
 	case *types.Named:
+		key := namedTypeSeenKey(t)
+		if key != "" {
+			if seen[key] {
+				return
+			}
+			seen[key] = true
+		}
 		indexReachableNamedType(root, fileSet, idx, current, t, seen)
 		for i := range t.TypeArgs().Len() {
 			indexReachableTypes(root, fileSet, idx, current, t.TypeArgs().At(i), seen)
@@ -534,6 +541,17 @@ func indexReachableTypes(root string, fileSet *token.FileSet, idx *indexFile, cu
 			indexReachableTypes(root, fileSet, idx, current, t.ExplicitMethod(i).Type(), seen)
 		}
 	}
+}
+
+func namedTypeSeenKey(named *types.Named) string {
+	if named == nil || named.Obj() == nil {
+		return ""
+	}
+	obj := named.Obj()
+	if obj.Pkg() == nil {
+		return obj.Name()
+	}
+	return obj.Pkg().Path() + "." + obj.Name()
 }
 
 func indexReachableTuple(root string, fileSet *token.FileSet, idx *indexFile, current *types.Package, tuple *types.Tuple, seen map[string]bool) {
@@ -554,10 +572,9 @@ func indexReachableNamedType(root string, fileSet *token.FileSet, idx *indexFile
 		return
 	}
 	key := typeString(named, current)
-	if key == "" || seen[key] {
+	if key == "" {
 		return
 	}
-	seen[key] = true
 
 	typ, ok := idx.Types[key]
 	if !ok {
