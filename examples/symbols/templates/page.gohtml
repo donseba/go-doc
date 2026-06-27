@@ -1,0 +1,61 @@
+{{/*
+@model Page github.com/donseba/go-doc/examples/symbols.Page
+@interaction LikesPoll
+@component PrimaryButton github.com/donseba/go-doc/examples/symbols.Button
+@model Button github.com/donseba/go-doc/examples/symbols.Button
+
+@jimmy Button github.com/donseba/go-doc/examples/symbols.Button
+*/}}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{{ Page.Title }}</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5; color: #172033; }
+        main { max-width: 48rem; }
+        section { border: 1px solid #d6d3d1; border-radius: .65rem; margin: 1rem 0; padding: 1rem; }
+        code { background: #f5f5f4; border-radius: .25rem; padding: .1rem .35rem; }
+        dl { display: grid; grid-template-columns: 9rem 1fr; gap: .4rem 1rem; }
+        dt { font-weight: 700; }
+        dd { margin: 0; }
+        .button { display: inline-block; border-radius: .45rem; padding: .65rem .9rem; text-decoration: none; }
+        .button.primary { background: #0f766e; color: white; }
+        .button.disabled { opacity: .55; pointer-events: none; }
+    </style>
+</head>
+<body>
+<main>
+    <h1>{{ Page.Title }}</h1>
+    <p>{{ Page.Description }}</p>
+
+    <section>
+        <h2>Configured symbol alias</h2>
+        <p><code>@interaction LikesPoll</code> is configured as <code>Interaction</code> in <code>.go-doc/config.json</code>.</p>
+        <dl>
+            <dt>ID</dt>
+            <dd>{{ LikesPoll.ID }}</dd>
+            <dt>Event</dt>
+            <dd>{{ LikesPoll.Event }}</dd>
+            <dt>Endpoint</dt>
+            <dd>{{ LikesPoll.Endpoint }}</dd>
+            <dt>Description</dt>
+            <dd>{{ LikesPoll.Description }}</dd>
+        </dl>
+    </section>
+
+    <section>
+        <h2>Explicit symbol type</h2>
+        <p><code>@component PrimaryButton github.com/donseba/go-doc/examples/symbols.Button</code> declares the component type directly.</p>
+        <a class="button {{ PrimaryButton.Variant }}{{ if not PrimaryButton.Enabled }} disabled{{ end }}" href="{{ PrimaryButton.Href }}">
+            {{ PrimaryButton.Label }}
+        </a>
+    </section>
+
+    <section>
+        <h2>Runtime side</h2>
+        <p>The template annotations are only the editor contract. The Go code still registers <code>LikesPoll</code> and <code>PrimaryButton</code> as normal template functions before parsing.</p>
+    </section>
+</main>
+</body>
+</html>

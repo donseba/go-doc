@@ -21,24 +21,26 @@ import (
 
 type (
 	indexFile struct {
-		Version   int                      `json:"version"`
-		Module    string                   `json:"module"`
-		Templates map[string]templateIndex `json:"templates"`
-		Types     map[string]goTypeIndex   `json:"types"`
-		Funcs     map[string]goFuncIndex   `json:"funcs,omitempty"`
-		Short     map[string][]string      `json:"short"`
-		Problems  []problem                `json:"problems,omitempty"`
+		Version       int                      `json:"version"`
+		Module        string                   `json:"module"`
+		Templates     map[string]templateIndex `json:"templates"`
+		Types         map[string]goTypeIndex   `json:"types"`
+		Funcs         map[string]goFuncIndex   `json:"funcs,omitempty"`
+		Short         map[string][]string      `json:"short"`
+		SymbolAliases map[string]string        `json:"symbolAliases,omitempty"`
+		Problems      []problem                `json:"problems,omitempty"`
 	}
 
 	templateIndex struct {
-		Name   string            `json:"name,omitempty"`
-		Models map[string]string `json:"models"`
-		Dot    string            `json:"dot,omitempty"`
-		Funcs  map[string]string `json:"funcs,omitempty"`
-		Gens   map[string]string `json:"gens,omitempty"`
-		Source string            `json:"source,omitempty"`
-		Line   int               `json:"line,omitempty"`
-		Column int               `json:"column,omitempty"`
+		Name    string            `json:"name,omitempty"`
+		Models  map[string]string `json:"models"`
+		Dot     string            `json:"dot,omitempty"`
+		Funcs   map[string]string `json:"funcs,omitempty"`
+		Gens    map[string]string `json:"gens,omitempty"`
+		Symbols map[string]string `json:"symbols,omitempty"`
+		Source  string            `json:"source,omitempty"`
+		Line    int               `json:"line,omitempty"`
+		Column  int               `json:"column,omitempty"`
 	}
 
 	goTypeIndex struct {
@@ -90,19 +92,59 @@ type (
 	}
 
 	indexConfig struct {
-		Include    []string          `json:"include"`
-		Exclude    []string          `json:"exclude"`
-		Functions  map[string]string `json:"functions"`
-		Enabled    *bool             `json:"enabled"`
-		WriteIndex bool              `json:"writeIndex"`
+		Include           []string                 `json:"include"`
+		Exclude           []string                 `json:"exclude"`
+		Functions         map[string]string        `json:"functions"`
+		SymbolAnnotations []symbolAnnotationConfig `json:"symbolAnnotations"`
+		Enabled           *bool                    `json:"enabled"`
+		WriteIndex        bool                     `json:"writeIndex"`
+	}
+
+	symbolAnnotationConfig struct {
+		Name string `json:"name"`
+		Type string `json:"type,omitempty"`
+	}
+
+	typedRoot struct {
+		Annotation string
+		Name       string
+		Type       string
 	}
 )
+
+func (tmpl templateIndex) typedRootType(name string) (string, string, bool) {
+	if typeName := tmpl.Models[name]; typeName != "" {
+		return typeName, "model", true
+	}
+	if typeName := tmpl.Symbols[name]; typeName != "" {
+		return typeName, "symbol", true
+	}
+	return "", "", false
+}
+
+func (tmpl templateIndex) typedRootNames() []string {
+	names := make([]string, 0, len(tmpl.Models)+len(tmpl.Symbols))
+	for name := range tmpl.Models {
+		names = append(names, name)
+	}
+	for name := range tmpl.Symbols {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (tmpl templateIndex) hasContracts() bool {
+	return len(tmpl.Models) > 0 || tmpl.Dot != "" || len(tmpl.Funcs) > 0 || len(tmpl.Gens) > 0 || len(tmpl.Symbols) > 0
+}
 
 var (
 	modelPattern                  = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
 	dotPattern                    = regexp.MustCompile(`(?m)^\s*@dot\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
 	funcPattern                   = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
 	genPattern                    = regexp.MustCompile(`(?m)^\s*@gen\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
+	symbolPattern                 = regexp.MustCompile(`(?m)^\s*@symbol\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+	annotationPattern             = regexp.MustCompile(`(?m)^\s*@([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*))?\s*$`)
 	templateCommentPattern        = regexp.MustCompile(`(?s)\{\{/\*(.*?)\*/\}\}`)
 	definePattern                 = regexp.MustCompile(`(?s)\{\{\s*(?:-)?\s*define\s+"([^"]+)"\s*(?:-)?\s*\}\}(.*?)\{\{\s*(?:-)?\s*end\s*(?:-)?\s*\}\}`)
 	leadingTemplateCommentPattern = regexp.MustCompile(`(?s)\{\{/\*.*?\*/\}\}\s*$`)
@@ -200,7 +242,7 @@ func Run(args []string) error {
 					return err
 				}
 			}
-			fmt.Fprintln(os.Stderr, "go-doc: no @model annotations found; index not written")
+			fmt.Fprintln(os.Stderr, "go-doc: no template contracts found; index not written")
 			return nil
 		}
 		return writeJSON(idx, *out)
@@ -243,7 +285,7 @@ func buildTemplateIndex(root string) (indexFile, bool, error) {
 	return buildIndexWithMode(root, true)
 }
 
-func buildIndexWithMode(root string, requireTemplateModels bool) (indexFile, bool, error) {
+func buildIndexWithMode(root string, requireTemplateContracts bool) (indexFile, bool, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return indexFile{}, false, err
@@ -261,6 +303,7 @@ func buildIndexWithMode(root string, requireTemplateModels bool) (indexFile, boo
 	if !cfg.enabled() {
 		return idx, false, nil
 	}
+	idx.SymbolAliases = symbolAliases(cfg)
 
 	module, err := readModulePath(absRoot)
 	if err != nil {
@@ -271,8 +314,8 @@ func buildIndexWithMode(root string, requireTemplateModels bool) (indexFile, boo
 	if err := scanTemplates(absRoot, cfg, &idx); err != nil {
 		return indexFile{}, false, err
 	}
-	needed := hasTemplateModels(idx)
-	if requireTemplateModels && !needed {
+	needed := hasTemplateContracts(idx)
+	if requireTemplateContracts && !needed {
 		return idx, false, nil
 	}
 	if err := scanGoTypes(absRoot, cfg, &idx); err != nil {
@@ -740,20 +783,21 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 		}
 
 		src := string(data)
-		models := parseModels(src)
+		models, symbols := parseTypedRootMaps(src, cfg)
 		dot := parseDot(src)
 		funcs := contractFuncs(cfg.Functions, parseFuncs(src))
 		gens := parseGens(src)
-		if len(models) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
+		if len(models) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 && len(symbols) == 0 {
 			scanTemplateDefines(root, path, src, cfg, idx)
 			return nil
 		}
 
 		idx.Templates[rel(root, path)] = templateIndex{
-			Models: models,
-			Dot:    dot,
-			Funcs:  funcs,
-			Gens:   gens,
+			Models:  models,
+			Dot:     dot,
+			Funcs:   funcs,
+			Gens:    gens,
+			Symbols: symbols,
 		}
 		scanTemplateDefines(root, path, src, cfg, idx)
 		return nil
@@ -764,24 +808,25 @@ func scanTemplateDefines(root, path, src string, cfg indexConfig, idx *indexFile
 	for _, match := range definePattern.FindAllStringSubmatchIndex(src, -1) {
 		name := src[match[2]:match[3]]
 		body := defineContractText(src, match[0], match[4], match[5])
-		models := parseModels(body)
+		models, symbols := parseTypedRootMaps(body, cfg)
 		dot := parseDot(body)
 		funcs := contractFuncs(cfg.Functions, parseFuncs(body))
 		gens := parseGens(body)
-		if len(models) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
+		if len(models) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 && len(symbols) == 0 {
 			continue
 		}
 		line, column := lineColumn(src, match[0])
 		source := rel(root, path)
 		idx.Templates[source+"#"+name] = templateIndex{
-			Name:   name,
-			Models: models,
-			Dot:    dot,
-			Funcs:  funcs,
-			Gens:   gens,
-			Source: source,
-			Line:   line,
-			Column: column,
+			Name:    name,
+			Models:  models,
+			Dot:     dot,
+			Funcs:   funcs,
+			Gens:    gens,
+			Symbols: symbols,
+			Source:  source,
+			Line:    line,
+			Column:  column,
 		}
 	}
 }
@@ -800,7 +845,7 @@ func defineContractText(src string, defineStart, bodyStart, bodyEnd int) string 
 
 func hasContractAnnotations(src string) bool {
 	src = contractScanText(src)
-	return modelPattern.MatchString(src) || dotPattern.MatchString(src) || funcPattern.MatchString(src) || genPattern.MatchString(src)
+	return modelPattern.MatchString(src) || dotPattern.MatchString(src) || funcPattern.MatchString(src) || genPattern.MatchString(src) || symbolPattern.MatchString(src)
 }
 
 func lineColumn(src string, offset int) (int, int) {
@@ -818,15 +863,6 @@ func lineColumn(src string, offset int) (int, int) {
 		column++
 	}
 	return line, column
-}
-
-func parseModels(src string) map[string]string {
-	src = contractScanText(src)
-	models := make(map[string]string)
-	for _, match := range modelPattern.FindAllStringSubmatch(src, -1) {
-		models[match[1]] = normalizeType(match[2])
-	}
-	return models
 }
 
 func parseDot(src string) string {
@@ -854,6 +890,79 @@ func parseGens(src string) map[string]string {
 		gens[match[1]] = strings.TrimSpace(match[2])
 	}
 	return gens
+}
+
+func parseTypedRootMaps(src string, cfg indexConfig) (map[string]string, map[string]string) {
+	models := make(map[string]string)
+	symbols := make(map[string]string)
+	for _, root := range parseTypedRoots(src, symbolAliases(cfg)) {
+		if root.Annotation == "model" {
+			models[root.Name] = root.Type
+			continue
+		}
+		symbols[root.Name] = root.Type
+	}
+	return models, symbols
+}
+
+func parseTypedRoots(src string, aliases map[string]string) []typedRoot {
+	src = contractScanText(src)
+	var roots []typedRoot
+	for _, match := range annotationPattern.FindAllStringSubmatch(src, -1) {
+		annotation, name, explicitType := match[1], match[2], match[3]
+		typeName := explicitType
+		switch annotation {
+		case "model":
+			if typeName == "" {
+				continue
+			}
+		case "symbol":
+			if typeName == "" {
+				continue
+			}
+		default:
+			defaultType, ok := aliases[annotation]
+			if !ok {
+				continue
+			}
+			if typeName == "" {
+				typeName = defaultType
+			}
+			if typeName == "" {
+				continue
+			}
+		}
+		roots = append(roots, typedRoot{
+			Annotation: annotation,
+			Name:       name,
+			Type:       normalizeType(typeName),
+		})
+	}
+	return roots
+}
+
+func symbolAliases(cfg indexConfig) map[string]string {
+	if len(cfg.SymbolAnnotations) == 0 {
+		return nil
+	}
+	aliases := make(map[string]string, len(cfg.SymbolAnnotations))
+	for _, annotation := range cfg.SymbolAnnotations {
+		name := strings.TrimSpace(annotation.Name)
+		if name == "" || reservedContractAnnotation(name) {
+			continue
+		}
+		aliases[name] = normalizeType(strings.TrimSpace(annotation.Type))
+	}
+	return aliases
+}
+
+func reservedContractAnnotation(name string) bool {
+	switch name {
+	case "model", "dot", "func", "gen", "symbol":
+		return true
+	default:
+		return false
+	}
 }
 
 func contractFuncs(defaults, local map[string]string) map[string]string {
@@ -944,8 +1053,44 @@ func validateTemplateTypes(idx *indexFile) {
 				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@func %s references unknown function %q", name, fn)})
 			}
 		}
+		for name, typ := range tmpl.Symbols {
+			if reservedTemplateNames[name] {
+				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@symbol %s uses a reserved template name", name)})
+				continue
+			}
+			if _, ok := tmpl.Models[name]; ok {
+				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@symbol %s collides with @model %s", name, name)})
+				continue
+			}
+			if _, ok := tmpl.Funcs[name]; ok {
+				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@symbol %s collides with @func %s", name, name)})
+				continue
+			}
+			if _, ok := tmpl.Gens[name]; ok {
+				idx.Problems = append(idx.Problems, problem{File: file, Message: fmt.Sprintf("@symbol %s collides with @gen %s", name, name)})
+				continue
+			}
+			if resolved := resolveIndexType(idx, typ); resolved != "" {
+				tmpl.Symbols[name] = resolved
+				idx.Templates[file] = tmpl
+			}
+		}
 		idx.Templates[file] = tmpl
 	}
+}
+
+func resolveIndexType(idx *indexFile, typ string) string {
+	if typ == "" {
+		return ""
+	}
+	if _, ok := idx.Types[typ]; ok {
+		return typ
+	}
+	matches := idx.Short[typ]
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	return ""
 }
 
 const genTypePrefix = "$go-doc/gen."
@@ -1020,9 +1165,9 @@ func ensureGeneratedNamespaceType(idx *indexFile, name, pkg string) (string, boo
 	return typeName, true
 }
 
-func hasTemplateModels(idx indexFile) bool {
+func hasTemplateContracts(idx indexFile) bool {
 	for _, tmpl := range idx.Templates {
-		if len(tmpl.Models) > 0 || tmpl.Dot != "" || len(tmpl.Funcs) > 0 || len(tmpl.Gens) > 0 {
+		if len(tmpl.Models) > 0 || tmpl.Dot != "" || len(tmpl.Funcs) > 0 || len(tmpl.Gens) > 0 || len(tmpl.Symbols) > 0 {
 			return true
 		}
 	}

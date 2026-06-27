@@ -48,7 +48,7 @@ func main() {
 	mux.HandleFunc("/", app.page("overview.gohtml", "Typed contracts for Go templates", "go-doc adds editor intelligence to normal html/template files.", "Documentation"))
 	mux.HandleFunc("/docs/install", app.page("install.gohtml", "Install", "Set up the CLI and editor integrations.", "Getting Started"))
 	mux.HandleFunc("/docs/contracts", app.page("contracts.gohtml", "Template contracts", "Declare the data shape once, then let the editor follow it.", "Core Concepts"))
-	mux.HandleFunc("/docs/annotations", app.page("annotations.gohtml", "Annotations", "Model, dot, and function annotations that describe template data.", "Core Concepts"))
+	mux.HandleFunc("/docs/annotations", app.page("annotations.gohtml", "Annotations", "Model, dot, function, and symbol annotations that describe template data.", "Core Concepts"))
 	mux.HandleFunc("/docs/generated-helpers", app.page("generated_helpers.gohtml", "Generated helpers", "Experimental package-like helper namespaces for normal Go templates.", "Core Concepts"))
 	mux.HandleFunc("/docs/editor", app.page("editor.gohtml", "Editor support", "Completion, diagnostics, hover, and navigation across supported editors.", "Tooling"))
 	mux.HandleFunc("/docs/renderer", app.page("renderer.gohtml", "Renderer", "A small helper for registering model values without changing template execution.", "Runtime"))

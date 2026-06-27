@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "include": ["/"],
+  "exclude": ["vendor"],
+  "writeIndex": false,
+  "symbolAnnotations": [
+    {
+      "name": "interaction",
+      "type": "github.com/donseba/go-doc/examples/symbols.Interaction"
+    },
+    {
+      "name": "component"
+    }
+  ]
+}

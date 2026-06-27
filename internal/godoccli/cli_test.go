@@ -291,7 +291,7 @@ func Lookup() (Page, error) {
 	}
 }
 
-func TestBuildTemplateIndexRequiresParamContract(t *testing.T) {
+func TestBuildTemplateIndexRequiresContract(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
 	writeFile(t, root, "todo.go", `package app
@@ -307,7 +307,7 @@ type Todo struct {
 		t.Fatalf("buildTemplateIndex() error = %v", err)
 	}
 	if needed {
-		t.Fatal("index should not be needed without at least one @model annotation")
+		t.Fatal("index should not be needed without at least one template contract")
 	}
 	if len(idx.Types) != 0 {
 		t.Fatalf("types should not be scanned when index is not needed, got %#v", idx.Types)
@@ -426,6 +426,54 @@ func Asset(path string) string {
 	tmpl := idx.Templates["templates/page.gohtml"]
 	if got := tmpl.Funcs["asset"]; got != "example.com/app.Asset" {
 		t.Fatalf("default asset func = %q", got)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexUsesConfigSymbolAnnotations(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "symbolAnnotations": [
+    {"name": "interaction", "type": "example.com/app.Interaction"},
+    {"name": "component"}
+  ]
+}`)
+	writeFile(t, root, "symbols.go", `package app
+
+type Interaction struct {
+	ID string
+}
+
+type Button struct {
+	Label string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@interaction LikesPoll
+@component Button example.com/app.Button
+*/}}
+{{ LikesPoll }}
+{{ Button.Label }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed for configured symbol annotations")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Symbols["LikesPoll"]; got != "example.com/app.Interaction" {
+		t.Fatalf("@interaction LikesPoll = %q", got)
+	}
+	if got := tmpl.Symbols["Button"]; got != "example.com/app.Button" {
+		t.Fatalf("@component Button = %q", got)
+	}
+	if idx.SymbolAliases["interaction"] != "example.com/app.Interaction" {
+		t.Fatalf("symbol aliases = %#v", idx.SymbolAliases)
 	}
 	if len(idx.Problems) != 0 {
 		t.Fatalf("unexpected problems: %#v", idx.Problems)

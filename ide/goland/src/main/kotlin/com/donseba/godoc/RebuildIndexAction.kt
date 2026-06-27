@@ -45,7 +45,7 @@ class RebuildIndexAction : AnAction() {
             if (outFile.isFile) {
                 notify(project, "go-doc index rebuilt", ".go-doc/index.json updated", NotificationType.INFORMATION)
             } else {
-                notify(project, "go-doc index not needed", "No @model annotations found; index not written.", NotificationType.INFORMATION)
+                notify(project, "go-doc index not needed", "No template contracts found; index not written.", NotificationType.INFORMATION)
             }
         }
     }

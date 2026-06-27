@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.donseba.godoc"
-version = "0.10.0"
+version = "0.10.6"
 
 kotlin {
     jvmToolchain(17)

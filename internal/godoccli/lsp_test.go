@@ -672,6 +672,111 @@ func TestLSPDiagnosticsWarnsForInvalidDeclaredFunctionArgument(t *testing.T) {
 	}
 }
 
+func TestLSPUnderstandsConfiguredSymbols(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		SymbolAliases: map[string]string{"interaction": "example.com/app.Interaction"},
+		Types: map[string]goTypeIndex{
+			"example.com/app.Interaction": {
+				Name: "Interaction",
+				Doc:  "Interaction is rendered by the host framework.",
+				File: "interaction.go",
+				Line: 3,
+				Fields: map[string]fieldIndex{
+					"ID": {Type: "string"},
+				},
+			},
+		},
+	}}
+	text := `{{/*
+@interaction LikesPoll
+*/}}
+{{ LikesPoll }}
+{{ LikesPoll.ID }}`
+	contract := mergeInlineContract(text, idx, templateIndex{})
+	if got := contract.Symbols["LikesPoll"]; got != "example.com/app.Interaction" {
+		t.Fatalf("symbol = %q", got)
+	}
+
+	if diagnostics := diagnosticsForText(text, idx, contract); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", diagnostics)
+	}
+
+	items := accessorCompletionItems(idx, contract, "Likes")
+	if len(items) != 1 || items[0].Label != "LikesPoll" {
+		t.Fatalf("items = %#v, want LikesPoll symbol completion", items)
+	}
+
+	tokens := semanticTokensForText(text, idx, contract)
+	foundDeclaration := false
+	foundUsage := false
+	foundField := false
+	for _, token := range tokens {
+		value := text[token.start : token.start+token.length]
+		if token.tokenType == semanticFunction && value == "LikesPoll" {
+			if token.start < strings.Index(text, "{{ LikesPoll }}") {
+				foundDeclaration = true
+			} else {
+				foundUsage = true
+			}
+		}
+		if token.tokenType == semanticField && value == "ID" {
+			foundField = true
+		}
+	}
+	if !foundDeclaration || !foundUsage || !foundField {
+		t.Fatalf("tokens = %#v, want symbol declaration, usage, and field", tokens)
+	}
+
+	root := t.TempDir()
+	uri := uriFromPath(filepath.Join(root, "page.gohtml"))
+	server := &lspServer{root: root, idx: idx.indexFile, docs: map[string]string{uri: text}}
+	hoverValue := server.hover(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     positionAt(text, strings.LastIndex(text, "LikesPoll")),
+	})
+	if hoverValue == nil {
+		t.Fatal("hover = nil, want symbol hover")
+	}
+}
+
+func TestLSPPlainSymbolAndAliasWithoutDefaultType(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		SymbolAliases: map[string]string{"component": ""},
+		Types: map[string]goTypeIndex{
+			"example.com/app.Button": {Name: "Button", Fields: map[string]fieldIndex{"Label": {Type: "string"}}},
+		},
+	}}
+	text := `{{/*
+@symbol LikesPoll example.com/app.Button
+@component Input
+*/}}
+{{ LikesPoll.Label }}`
+	contract := mergeInlineContract(text, idx, templateIndex{})
+	if got := contract.Symbols["LikesPoll"]; got != "example.com/app.Button" {
+		t.Fatalf("plain symbol = %q", got)
+	}
+	diagnostics := diagnosticsForText(text, idx, contract)
+	assertDiagnostic(t, diagnostics, "@component Input needs a type or a configured default type")
+}
+
+func TestLSPSymbolsDoNotUseFunctionArgumentValidation(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		SymbolAliases: map[string]string{"interaction": "example.com/app.Interaction"},
+		Types: map[string]goTypeIndex{
+			"example.com/app.Interaction": {Name: "Interaction", Fields: map[string]fieldIndex{}},
+		},
+	}}
+	text := `{{/*
+@interaction LikesPoll
+*/}}
+{{ LikesPoll "ignored-by-go-doc" }}`
+	contract := mergeInlineContract(text, idx, templateIndex{})
+	diagnostics := diagnosticsForText(text, idx, contract)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want symbols to avoid @func argument checks", diagnostics)
+	}
+}
+
 func TestLSPUnderstandsElseIfConditions(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{
@@ -2012,17 +2117,20 @@ func TestLSPSemanticTokensHighlightModelAccessorAndField(t *testing.T) {
 {{ page.Title }}`
 
 	tokens := semanticTokensForText(text, idx, contract)
-	if len(tokens) != 3 {
-		t.Fatalf("len(tokens) = %d, want 3: %#v", len(tokens), tokens)
+	if len(tokens) != 4 {
+		t.Fatalf("len(tokens) = %d, want 4: %#v", len(tokens), tokens)
 	}
-	if tokens[0].tokenType != semanticType || text[tokens[0].start:tokens[0].start+tokens[0].length] != "Page" {
-		t.Fatalf("type token = %#v", tokens[0])
+	if tokens[0].tokenType != semanticAccessor || text[tokens[0].start:tokens[0].start+tokens[0].length] != "page" {
+		t.Fatalf("model name token = %#v", tokens[0])
 	}
-	if tokens[1].tokenType != semanticAccessor || text[tokens[1].start:tokens[1].start+tokens[1].length] != "page" {
-		t.Fatalf("accessor token = %#v", tokens[1])
+	if tokens[1].tokenType != semanticType || text[tokens[1].start:tokens[1].start+tokens[1].length] != "Page" {
+		t.Fatalf("type token = %#v", tokens[1])
 	}
-	if tokens[2].tokenType != semanticField || text[tokens[2].start:tokens[2].start+tokens[2].length] != "Title" {
-		t.Fatalf("field token = %#v", tokens[2])
+	if tokens[2].tokenType != semanticAccessor || text[tokens[2].start:tokens[2].start+tokens[2].length] != "page" {
+		t.Fatalf("accessor token = %#v", tokens[2])
+	}
+	if tokens[3].tokenType != semanticField || text[tokens[3].start:tokens[3].start+tokens[3].length] != "Title" {
+		t.Fatalf("field token = %#v", tokens[3])
 	}
 }
 

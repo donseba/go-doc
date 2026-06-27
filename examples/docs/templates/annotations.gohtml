@@ -5,12 +5,15 @@
         <tr><td><code>@model Page pkg.Page</code></td><td>Named root value</td><td><code>{{`{{ Page.Title }}`}}</code></td></tr>
         <tr><td><code>@dot pkg.User</code></td><td>The current dot value</td><td><code>{{`{{ .Name }}`}}</code></td></tr>
         <tr><td><code>@func userByID pkg.UserByID</code></td><td>Declared template function</td><td><code>{{`{{ (userByID 2).Name }}`}}</code></td></tr>
+        <tr><td><code>@symbol LikesPoll pkg.Interaction</code></td><td>Typed runtime-provided symbol</td><td><code>{{`{{ LikesPoll.ID }}`}}</code></td></tr>
     </tbody>
 </table>
 
 <h2>Runtime side</h2>
-<p><code>@model</code> is a named accessor contract. The editor learns the type from the annotation, but runtime rendering still needs a value registered under that name. The optional renderer does this by creating a template function named after the model.</p>
+<p><code>@model</code> is a typed root for page or fragment data. The editor learns the type from the annotation, but runtime rendering still needs a value registered under that name. The optional renderer does this by creating a template function named after the model.</p>
 <p><code>@dot</code> is the contract for normal dot data. Use it when your application executes a template with <code>tmpl.Execute(w, value)</code> or passes dot into a child template.</p>
+<p><code>@symbol</code> is another typed root, but for framework or application-provided names that are not normal page models. It gives go-doc a type for completion, hover, diagnostics, and navigation, while your runtime still provides the actual value.</p>
+<p>Model roots and symbol roots use the same type-resolution path internally. The annotation names stay separate so the template remains clear about what is page data and what is framework/runtime glue.</p>
 
 <h2>Functions can return complex values</h2>
 <pre><code>{{`{{ with firstUser }}

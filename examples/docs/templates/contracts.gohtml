@@ -41,6 +41,35 @@ _, _ = tmpl.ParseFiles("templates/main.gohtml")`}}</code></pre>
 
 <p><code>@func</code> lets go-doc understand custom template functions, including argument checks and return types. If a function returns a struct, completion continues through <code>with</code> blocks and parenthesized calls.</p>
 
+<h2>Typed roots and symbols</h2>
+<p><code>@model</code> and <code>@symbol</code> are both typed roots. They complete, hover, navigate, and diagnose through the same engine. Use <code>@model</code> for page or fragment data. Use <code>@symbol</code> for names supplied by a renderer, framework, component system, or other runtime helper layer.</p>
+<pre><code>&#123;&#123;/*
+&#64;symbol LikesPoll github.com/example/app.Interaction
+*/&#125;&#125;
+
+&#123;&#123; LikesPoll.ID &#125;&#125;</code></pre>
+
+<p><code>@symbol</code> declares a typed runtime-provided name. It is useful for framework concepts that behave like values in the template but are not ordinary page models. The editor can complete fields and navigate to the declared type, but runtime code still has to register the real value or function.</p>
+
+<pre><code>{
+  "symbolAnnotations": [
+    {
+      "name": "interaction",
+      "type": "github.com/donseba/go-partial.Interaction"
+    },
+    {
+      "name": "component"
+    }
+  ]
+}</code></pre>
+
+<pre><code>&#123;&#123;/*
+&#64;interaction LikesPoll
+&#64;component Button github.com/example/ui.Button
+*/&#125;&#125;</code></pre>
+
+<p>Configured aliases let a project introduce its own annotation vocabulary. If the alias has a default type, the template only needs a name. If it has no default type, each declaration must include an explicit type. After parsing, aliases behave like <code>@symbol</code> roots. Use <code>@func</code> instead when the name is callable and you want arity, argument, pipeline, and return-type checks.</p>
+
 <h2>The tunnel</h2>
 <p>Every contract has two sides. The template comment is the entrance: it documents what the template expects. The runtime registration is the exit: it makes that name or function actually available to <code>html/template</code>. go-doc can explain the tunnel, but your application still has to connect both ends.</p>
 

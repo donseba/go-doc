@@ -4,10 +4,10 @@
 
 `go-doc` brings typed editor tooling to Go templates.
 
-It reads lightweight `@model`, `@dot`, and `@func` annotations in `.gohtml`,
-`.tmpl`, and `.html` templates, scans exported Go structs and functions in your
-module, and serves that knowledge to editors through a small Language Server
-Protocol server.
+It reads lightweight `@model`, `@dot`, `@func`, `@symbol`, and project-defined
+annotations in `.gohtml`, `.tmpl`, and `.html` templates, scans exported Go
+structs and functions in your module, and serves that knowledge to editors
+through a small Language Server Protocol server.
 
 ```gotemplate
 {{/*
@@ -46,8 +46,8 @@ contract that editors and tools can understand.
 
 ## Features
 
-- Typeahead for declared template models, built-in and custom template
-  functions, exported fields, and exported methods.
+- Typeahead for declared template models, generic template symbols, built-in
+  and custom template functions, exported fields, and exported methods.
 - Dot-context completion inside `range` and `with` blocks.
 - Diagnostics for unknown model names, fields, invalid `range` sources, and bad
   function calls.
@@ -57,8 +57,8 @@ contract that editors and tools can understand.
   fields from template diagnostics.
 - Hover and go-to-definition for model types, fields, methods, functions, and
   template includes.
-- Semantic highlighting for model types, model names, built-in functions,
-  custom functions, fields, and methods.
+- Semantic highlighting for model types, model names, generic symbols,
+  built-in functions, custom functions, fields, and methods.
 - A shared LSP core used by GoLand, VS Code, Sublime Text, Vim, and Neovim.
 - Optional `.go-doc/index.json` generation for CI, debugging, and tool
   interoperability.
@@ -157,6 +157,60 @@ Use `@func` for custom helpers that are local to one template:
 For helpers available everywhere, prefer `.go-doc/config.json` so you do not
 repeat the same `@func` declarations across templates.
 
+`@model` and `@symbol` are both typed roots: named values that go-doc can
+complete, validate, hover, and navigate. The difference is intent. `@model` is
+the protected contract for page or fragment data. `@symbol` is for framework or
+renderer-provided values that are not normal page models and do not need
+function-call validation:
+
+```gotemplate
+{{/*
+@symbol LikesPoll github.com/example/app.Interaction
+*/}}
+
+{{ LikesPoll.ID }}
+```
+
+A symbol is still a two-way contract. The annotation tells go-doc the expected
+type, but your runtime must still register the actual template accessor or
+function that makes `LikesPoll` available. Under the hood, model roots and
+symbol roots share the same type resolution path; the separate annotation names
+exist so templates remain honest about what is application data and what is
+framework/runtime glue.
+
+Projects can define shorter symbol annotations in `.go-doc/config.json`. This
+lets framework packages expose their own vocabulary without hard-coding it into
+go-doc:
+
+```json
+{
+  "symbolAnnotations": [
+    {
+      "name": "interaction",
+      "type": "github.com/donseba/go-partial.Interaction"
+    },
+    {
+      "name": "component"
+    }
+  ]
+}
+```
+
+With that configuration, templates can write:
+
+```gotemplate
+{{/*
+@interaction LikesPoll
+@component Button github.com/example/ui.Button
+*/}}
+```
+
+`@interaction LikesPoll` gets the configured default type. `@component Button`
+requires an explicit type because its config entry has no default type. These
+aliases behave like `@symbol` roots after parsing. `@func` remains the right
+annotation for callable helpers, because it carries function signatures, arity
+checks, argument checks, pipelines, and return types.
+
 ## Configuration
 
 No `.go-doc` folder is required. By default, `go-doc` finds the nearest
@@ -171,6 +225,7 @@ The default configuration is:
   "include": ["/"],
   "exclude": ["vendor"],
   "functions": {},
+  "symbolAnnotations": [],
   "writeIndex": false
 }
 ```
@@ -186,7 +241,12 @@ Add `.go-doc/config.json` only when a project needs to change those defaults:
   "functions": {
     "asset": "github.com/example/app.Asset",
     "formatDate": "github.com/example/app.FormatDate"
-  }
+  },
+  "symbolAnnotations": [
+    {
+      "name": "component"
+    }
+  ]
 }
 ```
 
@@ -195,6 +255,10 @@ includes. `enabled: false` disables go-doc for the project while leaving the
 editor plugin installed. `functions` describes helpers that are available in every template so
 the language server can complete and validate them without repeating `@func` in
 each file.
+`symbolAnnotations` describes custom annotation names that produce typed runtime
+symbols. Use this for framework concepts such as `@interaction`, `@component`,
+or any project-specific template value that should be completed and navigated
+like a model but is not a callable function.
 
 `writeIndex` controls editor auto-indexing. Keep it `false` unless you want editor
 adapters to maintain `.go-doc/index.json` after file changes. Even when it is
@@ -344,6 +408,10 @@ The standalone example in `examples/standalone` shows this without depending on
 
 The todo example in `examples/todo` shows a small multi-template setup with a
 main shell, todo list, and todo detail template.
+
+The symbols example in `examples/symbols` shows configured symbol annotations
+such as `@interaction` and `@component`, plus the runtime `FuncMap` that makes
+those names available to `html/template`.
 
 ## Local Development
 

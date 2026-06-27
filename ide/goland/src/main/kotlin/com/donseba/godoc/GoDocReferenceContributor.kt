@@ -30,8 +30,23 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                     val elementRange = element.textRange ?: return PsiReference.EMPTY_ARRAY
                     val references = mutableListOf<PsiReference>()
 
+                    GoDocTemplateContext.typedRootReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
+                        .forEach { ref ->
+                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
+                            val type = index.types[ref.typeName] ?: return@forEach
+                            references.add(
+                                GoDocPsiReference(
+                                    element = element,
+                                    absoluteStart = ref.startOffset,
+                                    absoluteEnd = ref.endOffset,
+                                    target = GoDocTarget(index.rootPath, type.file, type.line, type.column),
+                                ),
+                            )
+                        }
+
                     GoDocTemplateContext.typeReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
                         .forEach { ref ->
+                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
                             val type = index.types[ref.typeName] ?: return@forEach
                             references.add(
                                 GoDocPsiReference(
@@ -45,6 +60,7 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
 
                     GoDocTemplateContext.funcReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
                         .forEach { ref ->
+                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
                             val fn = index.funcs[ref.funcName] ?: return@forEach
                             references.add(
                                 GoDocPsiReference(
@@ -58,6 +74,7 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
 
                     GoDocTemplateContext.templateIncludeReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
                         .forEach { ref ->
+                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
                             references.add(
                                 GoDocPsiReference(
                                     element = element,
@@ -71,9 +88,10 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                     val contract = index.contractForFileAt(project, virtualFile.path, elementRange.startOffset) ?: return references.toTypedArray()
                     GoDocTemplateContext.fieldReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index, contract)
                         .forEach { ref ->
+                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
                             val owner = index.types[ref.ownerTypeName] ?: return@forEach
                             val target = when {
-                                contract.models[ref.memberName] == ref.ownerTypeName -> GoDocTarget(index.rootPath, owner.file, owner.line, owner.column)
+                                contract.isTypedRoot(ref.memberName, ref.ownerTypeName) -> GoDocTarget(index.rootPath, owner.file, owner.line, owner.column)
                                 owner.fields[ref.memberName] != null -> {
                                     val field = owner.fields.getValue(ref.memberName)
                                     GoDocTarget(index.rootPath, field.file.ifBlank { owner.file }, field.line, field.column)
@@ -99,6 +117,18 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
             },
         )
     }
+}
+
+private fun elementOwnsToken(element: PsiElement, absoluteStart: Int, absoluteEnd: Int): Boolean {
+    val range = element.textRange ?: return false
+    if (!range.containsRange(absoluteStart, absoluteEnd)) return false
+    val midpoint = absoluteStart + ((absoluteEnd - absoluteStart).coerceAtLeast(1) / 2)
+    var leaf = element.containingFile?.findElementAt(midpoint.coerceAtMost((element.containingFile?.textLength ?: 1) - 1))
+        ?: return false
+    while (leaf.parent != null && leaf.textRange != null && !leaf.textRange.containsRange(absoluteStart, absoluteEnd)) {
+        leaf = leaf.parent
+    }
+    return leaf == element
 }
 
 private class GoDocPsiReference(
