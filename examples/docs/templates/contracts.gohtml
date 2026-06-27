@@ -68,7 +68,8 @@ _, _ = tmpl.ParseFiles("templates/main.gohtml")`}}</code></pre>
 &#64;component Button github.com/example/ui.Button
 */&#125;&#125;</code></pre>
 
-<p>Configured aliases let a project introduce its own annotation vocabulary. If the alias has a default type, the template only needs a name. If it has no default type, each declaration must include an explicit type. After parsing, aliases behave like <code>@symbol</code> roots. Use <code>@func</code> instead when the name is callable and you want arity, argument, pipeline, and return-type checks.</p>
+<p>Custom annotation names are open by default when the declaration includes an explicit type, so <code>@component Button github.com/example/ui.Button</code> works even without config. Configured aliases let a project introduce known vocabulary. If the alias has a default type, the template only needs a name. If it has no default type, each declaration must include an explicit type. After parsing, aliases behave like <code>@symbol</code> roots.</p>
+<p>Set <code>symbolStrictMode: true</code> when you want typo protection for annotation names. In strict mode, <code>@jimmy Button github.com/example/ui.Button</code> warns unless <code>jimmy</code> is listed in <code>symbolAnnotations</code>. Use <code>@func</code> instead when the name is callable and you want arity, argument, pipeline, and return-type checks.</p>
 
 <h2>The tunnel</h2>
 <p>Every contract has two sides. The template comment is the entrance: it documents what the template expects. The runtime registration is the exit: it makes that name or function actually available to <code>html/template</code>. go-doc can explain the tunnel, but your application still has to connect both ends.</p>

@@ -300,7 +300,13 @@ object GoDocTemplateContext {
                 val explicitTypeRange = match.groups[3]?.range
                 val typeName = when (annotation) {
                     "model", "symbol" -> match.groupValues.getOrNull(3).orEmpty()
-                    else -> match.groupValues.getOrNull(3).orEmpty().ifBlank { index.symbolAliases[annotation].orEmpty() }
+                    else -> {
+                        if (isReservedContractAnnotation(annotation)) return@flatMap emptyList()
+                        val explicit = match.groupValues.getOrNull(3).orEmpty()
+                        val aliasType = index.symbolAliases[annotation]
+                        if (aliasType == null && index.symbolStrictMode) ""
+                        else explicit.ifBlank { aliasType.orEmpty() }
+                    }
                 }
                 if (typeName.isBlank()) return@flatMap emptyList()
                 val resolved = index.resolveGoType(typeName) ?: typeName.takeIf { index.types.containsKey(it) } ?: return@flatMap emptyList()
@@ -418,8 +424,10 @@ object GoDocTemplateContext {
                     if (typeName.isBlank()) return@mapNotNull null
                 }
                 else -> {
-                    val aliasType = index.symbolAliases[annotation] ?: return@mapNotNull null
-                    if (typeName.isBlank()) typeName = aliasType
+                    if (isReservedContractAnnotation(annotation)) return@mapNotNull null
+                    val aliasType = index.symbolAliases[annotation]
+                    if (aliasType == null && index.symbolStrictMode) return@mapNotNull null
+                    if (typeName.isBlank() && aliasType != null) typeName = aliasType
                     if (typeName.isBlank()) return@mapNotNull null
                 }
             }
@@ -605,6 +613,10 @@ object GoDocTemplateContext {
         val name: String,
         val typeName: String,
     )
+
+    private fun isReservedContractAnnotation(name: String): Boolean {
+        return name == "dot" || name == "func" || name == "gen"
+    }
 
     private fun modelNamesNear(text: String, offset: Int): Set<String> {
         val before = text.substring(0, offset.coerceIn(0, text.length))

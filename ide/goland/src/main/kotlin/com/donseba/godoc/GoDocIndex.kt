@@ -76,6 +76,7 @@ class GoDocIndex(
     val templates: Map<String, TemplateContract>,
     val short: Map<String, List<String>>,
     val symbolAliases: Map<String, String> = emptyMap(),
+    val symbolStrictMode: Boolean = false,
     val source: String? = null,
     val rootPath: String? = null,
     val checkedPaths: List<String> = emptyList(),
@@ -122,6 +123,7 @@ class GoDocIndex(
             templates = emptyMap(),
             short = emptyMap(),
             symbolAliases = emptyMap(),
+            symbolStrictMode = false,
             checkedPaths = checkedPaths,
             loadError = loadError,
         )
@@ -325,6 +327,7 @@ class GoDocIndex(
             val symbolAliases = jsonObject(root, "symbolAliases")?.entrySet()?.associate { (name, value) ->
                 name to value.asString
             } ?: emptyMap()
+            val symbolStrictMode = root.get("symbolStrictMode")?.asBoolean ?: false
 
             return GoDocIndex(
                 types = types,
@@ -332,6 +335,7 @@ class GoDocIndex(
                 templates = templates,
                 short = short,
                 symbolAliases = symbolAliases,
+                symbolStrictMode = symbolStrictMode,
                 source = source,
                 rootPath = rootPath,
                 checkedPaths = checkedPaths,
@@ -634,8 +638,10 @@ class GoDocIndex(
                     if (typeName.isBlank()) return@mapNotNull null
                 }
                 else -> {
-                    val aliasType = symbolAliases[annotation] ?: return@mapNotNull null
-                    if (typeName.isBlank()) typeName = aliasType
+                    if (isReservedContractAnnotation(annotation)) return@mapNotNull null
+                    val aliasType = symbolAliases[annotation]
+                    if (aliasType == null && symbolStrictMode) return@mapNotNull null
+                    if (typeName.isBlank() && aliasType != null) typeName = aliasType
                     if (typeName.isBlank()) return@mapNotNull null
                 }
             }
@@ -749,4 +755,8 @@ class GoDocIndex(
         val name: String,
         val typeName: String,
     )
+
+    private fun isReservedContractAnnotation(name: String): Boolean {
+        return name == "dot" || name == "func" || name == "gen"
+    }
 }

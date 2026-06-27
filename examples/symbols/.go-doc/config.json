@@ -11,5 +11,6 @@
     {
       "name": "component"
     }
-  ]
+  ],
+  "symbolStrictMode": false
 }

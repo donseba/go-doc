@@ -28,6 +28,7 @@ type (
 		Funcs         map[string]goFuncIndex   `json:"funcs,omitempty"`
 		Short         map[string][]string      `json:"short"`
 		SymbolAliases map[string]string        `json:"symbolAliases,omitempty"`
+		SymbolStrict  bool                     `json:"symbolStrictMode,omitempty"`
 		Problems      []problem                `json:"problems,omitempty"`
 	}
 
@@ -96,6 +97,7 @@ type (
 		Exclude           []string                 `json:"exclude"`
 		Functions         map[string]string        `json:"functions"`
 		SymbolAnnotations []symbolAnnotationConfig `json:"symbolAnnotations"`
+		SymbolStrict      bool                     `json:"symbolStrictMode"`
 		Enabled           *bool                    `json:"enabled"`
 		WriteIndex        bool                     `json:"writeIndex"`
 	}
@@ -304,6 +306,7 @@ func buildIndexWithMode(root string, requireTemplateContracts bool) (indexFile, 
 		return idx, false, nil
 	}
 	idx.SymbolAliases = symbolAliases(cfg)
+	idx.SymbolStrict = cfg.SymbolStrict
 
 	module, err := readModulePath(absRoot)
 	if err != nil {
@@ -895,7 +898,7 @@ func parseGens(src string) map[string]string {
 func parseTypedRootMaps(src string, cfg indexConfig) (map[string]string, map[string]string) {
 	models := make(map[string]string)
 	symbols := make(map[string]string)
-	for _, root := range parseTypedRoots(src, symbolAliases(cfg)) {
+	for _, root := range parseTypedRoots(src, symbolParseConfig{Aliases: symbolAliases(cfg), Strict: cfg.SymbolStrict}) {
 		if root.Annotation == "model" {
 			models[root.Name] = root.Type
 			continue
@@ -905,7 +908,12 @@ func parseTypedRootMaps(src string, cfg indexConfig) (map[string]string, map[str
 	return models, symbols
 }
 
-func parseTypedRoots(src string, aliases map[string]string) []typedRoot {
+type symbolParseConfig struct {
+	Aliases map[string]string
+	Strict  bool
+}
+
+func parseTypedRoots(src string, symbols symbolParseConfig) []typedRoot {
 	src = contractScanText(src)
 	var roots []typedRoot
 	for _, match := range annotationPattern.FindAllStringSubmatch(src, -1) {
@@ -921,11 +929,14 @@ func parseTypedRoots(src string, aliases map[string]string) []typedRoot {
 				continue
 			}
 		default:
-			defaultType, ok := aliases[annotation]
-			if !ok {
+			if reservedContractAnnotation(annotation) {
 				continue
 			}
-			if typeName == "" {
+			defaultType, known := symbols.Aliases[annotation]
+			if !known && symbols.Strict {
+				continue
+			}
+			if typeName == "" && known {
 				typeName = defaultType
 			}
 			if typeName == "" {

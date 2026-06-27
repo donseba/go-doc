@@ -178,9 +178,18 @@ symbol roots share the same type resolution path; the separate annotation names
 exist so templates remain honest about what is application data and what is
 framework/runtime glue.
 
+Any custom annotation with an explicit type is accepted by default:
+
+```gotemplate
+{{/*
+@component Button github.com/example/ui.Button
+@interaction LikesPoll github.com/donseba/go-partial.Interaction
+*/}}
+```
+
 Projects can define shorter symbol annotations in `.go-doc/config.json`. This
 lets framework packages expose their own vocabulary without hard-coding it into
-go-doc:
+go-doc, and it lets stricter teams decide which annotation names are allowed:
 
 ```json
 {
@@ -211,6 +220,12 @@ aliases behave like `@symbol` roots after parsing. `@func` remains the right
 annotation for callable helpers, because it carries function signatures, arity
 checks, argument checks, pipelines, and return types.
 
+By default, custom annotation names are open. `@jimmy Button
+github.com/example/ui.Button` is valid because it includes an explicit type. Set
+`symbolStrictMode: true` when you want go-doc to warn about unconfigured custom
+annotation names. In strict mode, only `@symbol` and entries listed in
+`symbolAnnotations` are accepted as symbol annotations.
+
 ## Configuration
 
 No `.go-doc` folder is required. By default, `go-doc` finds the nearest
@@ -226,6 +241,7 @@ The default configuration is:
   "exclude": ["vendor"],
   "functions": {},
   "symbolAnnotations": [],
+  "symbolStrictMode": false,
   "writeIndex": false
 }
 ```
@@ -246,7 +262,8 @@ Add `.go-doc/config.json` only when a project needs to change those defaults:
     {
       "name": "component"
     }
-  ]
+  ],
+  "symbolStrictMode": false
 }
 ```
 
@@ -258,7 +275,9 @@ each file.
 `symbolAnnotations` describes custom annotation names that produce typed runtime
 symbols. Use this for framework concepts such as `@interaction`, `@component`,
 or any project-specific template value that should be completed and navigated
-like a model but is not a callable function.
+like a model but is not a callable function. `symbolStrictMode` defaults to
+`false`; when set to `true`, unconfigured custom annotation names are reported as
+typos even if they include an explicit type.
 
 `writeIndex` controls editor auto-indexing. Keep it `false` unless you want editor
 adapters to maintain `.go-doc/index.json` after file changes. Even when it is

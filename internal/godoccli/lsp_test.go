@@ -759,6 +759,44 @@ func TestLSPPlainSymbolAndAliasWithoutDefaultType(t *testing.T) {
 	assertDiagnostic(t, diagnostics, "@component Input needs a type or a configured default type")
 }
 
+func TestLSPAllowsExplicitUnknownSymbolWhenNotStrict(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Button": {Name: "Button", Fields: map[string]fieldIndex{"Label": {Type: "string"}}},
+		},
+	}}
+	text := `{{/*
+@jimmy Button example.com/app.Button
+*/}}
+{{ Button.Label }}`
+	contract := mergeInlineContract(text, idx, templateIndex{})
+	if got := contract.Symbols["Button"]; got != "example.com/app.Button" {
+		t.Fatalf("symbol = %q", got)
+	}
+	if diagnostics := diagnosticsForText(text, idx, contract); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", diagnostics)
+	}
+}
+
+func TestLSPStrictModeWarnsForUnknownSymbolAnnotation(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		SymbolStrict: true,
+		Types: map[string]goTypeIndex{
+			"example.com/app.Button": {Name: "Button", Fields: map[string]fieldIndex{"Label": {Type: "string"}}},
+		},
+	}}
+	text := `{{/*
+@jimmy Button example.com/app.Button
+*/}}
+{{ Button.Label }}`
+	contract := mergeInlineContract(text, idx, templateIndex{})
+	if _, ok := contract.Symbols["Button"]; ok {
+		t.Fatalf("contract symbols = %#v, want no Button", contract.Symbols)
+	}
+	diagnostics := diagnosticsForText(text, idx, contract)
+	assertDiagnostic(t, diagnostics, "Unknown go-doc annotation '@jimmy'")
+}
+
 func TestLSPSymbolsDoNotUseFunctionArgumentValidation(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		SymbolAliases: map[string]string{"interaction": "example.com/app.Interaction"},
@@ -2093,6 +2131,52 @@ func TestLSPCompletesModelAccessorsAndModelTypes(t *testing.T) {
 	})
 	if len(items) != 1 || items[0].Label != "example.com/app.Page" {
 		t.Fatalf("model completions = %#v", items)
+	}
+}
+
+func TestLSPCompletesContractDeclarations(t *testing.T) {
+	idx := indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Page": {Name: "Page", Package: "example.com/app", Fields: map[string]fieldIndex{}},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.Add": {Name: "Add", Package: "example.com/app", Signature: "func Add(a, b int) int"},
+		},
+		Short:         map[string][]string{"Page": {"example.com/app.Page"}},
+		SymbolAliases: map[string]string{"component": ""},
+	}
+	uri := "file:///template.gohtml"
+	server := &lspServer{root: ".", idx: idx, docs: map[string]string{uri: `{{/*
+@
+*/}}`}}
+	items := server.completions(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     position{Line: 1, Character: len(`@`)},
+	})
+	if !hasCompletionLabel(items, "model") || !hasCompletionLabel(items, "component") {
+		t.Fatalf("annotation completions = %#v", items)
+	}
+
+	server.docs[uri] = `{{/*
+@component Button 
+*/}}`
+	items = server.completions(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     position{Line: 1, Character: len(`@component Button `)},
+	})
+	if !hasCompletionLabel(items, "example.com/app.Page") {
+		t.Fatalf("type completions = %#v", items)
+	}
+
+	server.docs[uri] = `{{/*
+@func add 
+*/}}`
+	items = server.completions(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     position{Line: 1, Character: len(`@func add `)},
+	})
+	if !hasCompletionLabel(items, "example.com/app.Add") {
+		t.Fatalf("function completions = %#v", items)
 	}
 }
 

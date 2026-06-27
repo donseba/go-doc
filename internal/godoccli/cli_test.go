@@ -480,6 +480,67 @@ type Button struct {
 	}
 }
 
+func TestBuildIndexAllowsExplicitCustomSymbolsByDefault(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "symbols.go", `package app
+
+type Button struct {
+	Label string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@jimmy Button example.com/app.Button
+*/}}
+{{ Button.Label }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed for explicit custom symbol annotations")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Symbols["Button"]; got != "example.com/app.Button" {
+		t.Fatalf("@jimmy Button = %q", got)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexStrictModeIgnoresUnknownCustomSymbols(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{"symbolStrictMode": true}`)
+	writeFile(t, root, "symbols.go", `package app
+
+type Button struct {
+	Label string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@jimmy Button example.com/app.Button
+*/}}
+{{ Button.Label }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if needed {
+		t.Fatal("index should not be needed for an unknown strict-mode symbol")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if _, ok := tmpl.Symbols["Button"]; ok {
+		t.Fatalf("strict mode should not accept unknown @jimmy symbol: %#v", tmpl.Symbols)
+	}
+	if !idx.SymbolStrict {
+		t.Fatal("SymbolStrict = false, want true")
+	}
+}
+
 func TestBuildIndexProjectsGenNamespace(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
