@@ -44,7 +44,7 @@ object GoDocCliInstaller {
                         if (outFile.isFile) {
                             notify(project, "go-doc index rebuilt", successMessage, NotificationType.INFORMATION)
                         } else {
-                            notify(project, "go-doc index not needed", "No @model annotations found; index not written.", NotificationType.INFORMATION)
+                            notify(project, "go-doc index not needed", "No template contracts found; index not written.", NotificationType.INFORMATION)
                         }
                     }
                 }

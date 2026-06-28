@@ -94,8 +94,8 @@ type privateState struct {
 	}
 
 	contract := idx.Templates["templates/todos.gohtml"]
-	if contract.Models["page"] != "example.com/app.Page" {
-		t.Fatalf("@model page = %q", contract.Models["page"])
+	if contract.Roots["page"] != "example.com/app.Page" {
+		t.Fatalf("@model page = %q", contract.Roots["page"])
 	}
 }
 
@@ -156,8 +156,8 @@ func FirstUser() User {
 		t.Fatal("index should be needed for one-line annotations")
 	}
 	page := idx.Templates["templates/page.gohtml"]
-	if page.Models["Page"] != "example.com/app.Page" {
-		t.Fatalf("Page model = %q", page.Models["Page"])
+	if page.Roots["Page"] != "example.com/app.Page" {
+		t.Fatalf("Page model = %q", page.Roots["Page"])
 	}
 	if page.Funcs["firstUser"] != "FirstUser" {
 		t.Fatalf("firstUser func = %q", page.Funcs["firstUser"])
@@ -291,7 +291,7 @@ func Lookup() (Page, error) {
 	}
 }
 
-func TestBuildTemplateIndexRequiresParamContract(t *testing.T) {
+func TestBuildTemplateIndexRequiresContract(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
 	writeFile(t, root, "todo.go", `package app
@@ -307,7 +307,7 @@ type Todo struct {
 		t.Fatalf("buildTemplateIndex() error = %v", err)
 	}
 	if needed {
-		t.Fatal("index should not be needed without at least one @model annotation")
+		t.Fatal("index should not be needed without at least one template contract")
 	}
 	if len(idx.Types) != 0 {
 		t.Fatalf("types should not be scanned when index is not needed, got %#v", idx.Types)
@@ -432,6 +432,115 @@ func Asset(path string) string {
 	}
 }
 
+func TestBuildIndexUsesConfigSymbolAnnotations(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "symbolAnnotations": [
+    {"name": "interaction", "type": "example.com/app.Interaction"},
+    {"name": "component"}
+  ]
+}`)
+	writeFile(t, root, "symbols.go", `package app
+
+type Interaction struct {
+	ID string
+}
+
+type Button struct {
+	Label string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@interaction LikesPoll
+@component Button example.com/app.Button
+*/}}
+{{ LikesPoll }}
+{{ Button.Label }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed for configured symbol annotations")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Roots["LikesPoll"]; got != "example.com/app.Interaction" {
+		t.Fatalf("@interaction LikesPoll = %q", got)
+	}
+	if got := tmpl.Roots["Button"]; got != "example.com/app.Button" {
+		t.Fatalf("@component Button = %q", got)
+	}
+	if idx.SymbolAliases["interaction"] != "example.com/app.Interaction" {
+		t.Fatalf("symbol aliases = %#v", idx.SymbolAliases)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexAllowsExplicitCustomSymbolsByDefault(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "symbols.go", `package app
+
+type Button struct {
+	Label string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@jimmy Button example.com/app.Button
+*/}}
+{{ Button.Label }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed for explicit custom symbol annotations")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Roots["Button"]; got != "example.com/app.Button" {
+		t.Fatalf("@jimmy Button = %q", got)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexStrictModeIgnoresUnknownCustomSymbols(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{"symbolStrictMode": true}`)
+	writeFile(t, root, "symbols.go", `package app
+
+type Button struct {
+	Label string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@jimmy Button example.com/app.Button
+*/}}
+{{ Button.Label }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if needed {
+		t.Fatal("index should not be needed for an unknown strict-mode symbol")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if _, ok := tmpl.Roots["Button"]; ok {
+		t.Fatalf("strict mode should not accept unknown @jimmy symbol: %#v", tmpl.Roots)
+	}
+	if !idx.SymbolStrict {
+		t.Fatal("SymbolStrict = false, want true")
+	}
+}
+
 func TestBuildIndexProjectsGenNamespace(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
@@ -469,9 +578,9 @@ func FormatTime(t time.Time, layout string) string {
 	if tmpl.Gens["view"] != "example.com/app/viewfuncs" {
 		t.Fatalf("@gen view = %q", tmpl.Gens["view"])
 	}
-	genType := tmpl.Models["view"]
+	genType := tmpl.Roots["view"]
 	if genType == "" {
-		t.Fatalf("@gen namespace was not projected into models: %#v", tmpl)
+		t.Fatalf("@gen namespace was not projected into Roots: %#v", tmpl)
 	}
 	viewType := idx.Types[genType]
 	if viewType.File != "viewfuncs/viewfuncs.go" || viewType.Line != 1 || viewType.Column != 1 {

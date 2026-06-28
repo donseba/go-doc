@@ -193,9 +193,9 @@ async function rebuildIndex(root, notify) {
   }
 
   if (!fs.existsSync(outFile)) {
-    const message = (result.stderr || result.stdout || "no @model annotations found; index not written").trim();
+    const message = (result.stderr || result.stdout || "no template contracts found; index not written").trim();
     if (message) output.appendLine(message);
-    if (notify) vscode.window.showInformationMessage("go-doc index not needed: no @model annotations found");
+    if (notify) vscode.window.showInformationMessage("go-doc index not needed: no template contracts found");
   } else if (notify) {
     vscode.window.showInformationMessage("go-doc index rebuilt");
   }

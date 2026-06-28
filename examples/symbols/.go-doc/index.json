@@ -1,0 +1,124 @@
+{
+  "version": 2,
+  "module": "github.com/donseba/go-doc/examples/symbols",
+  "templates": {
+    "templates/page.gohtml": {
+      "roots": {
+        "Button": "github.com/donseba/go-doc/examples/symbols.Button",
+        "Button2": "github.com/donseba/go-doc/examples/symbols.Button",
+        "LikesPoll": "github.com/donseba/go-doc/examples/symbols.Interaction",
+        "Page": "github.com/donseba/go-doc/examples/symbols.Page",
+        "PageTest": "github.com/donseba/go-doc/examples/symbols.Page",
+        "PrimaryButton": "github.com/donseba/go-doc/examples/symbols.Button"
+      }
+    }
+  },
+  "types": {
+    "github.com/donseba/go-doc/examples/symbols.Button": {
+      "name": "Button",
+      "package": "github.com/donseba/go-doc/examples/symbols",
+      "file": "models.go",
+      "line": 21,
+      "column": 6,
+      "doc": "Button is an application component symbol.",
+      "fields": {
+        "Enabled": {
+          "type": "bool",
+          "file": "models.go",
+          "line": 25,
+          "column": 2
+        },
+        "Href": {
+          "type": "string",
+          "file": "models.go",
+          "line": 23,
+          "column": 2
+        },
+        "Label": {
+          "type": "string",
+          "file": "models.go",
+          "line": 22,
+          "column": 2
+        },
+        "Variant": {
+          "type": "string",
+          "file": "models.go",
+          "line": 24,
+          "column": 2
+        }
+      }
+    },
+    "github.com/donseba/go-doc/examples/symbols.Interaction": {
+      "name": "Interaction",
+      "package": "github.com/donseba/go-doc/examples/symbols",
+      "file": "models.go",
+      "line": 13,
+      "column": 6,
+      "doc": "Interaction is a framework-style runtime symbol.\n\nA real package such as go-partial could expose this type and register concrete\ninteractions for the template runtime.",
+      "fields": {
+        "Description": {
+          "type": "string",
+          "file": "models.go",
+          "line": 17,
+          "column": 2
+        },
+        "Endpoint": {
+          "type": "string",
+          "file": "models.go",
+          "line": 16,
+          "column": 2
+        },
+        "Event": {
+          "type": "string",
+          "file": "models.go",
+          "line": 15,
+          "column": 2
+        },
+        "ID": {
+          "type": "string",
+          "file": "models.go",
+          "line": 14,
+          "column": 2
+        }
+      }
+    },
+    "github.com/donseba/go-doc/examples/symbols.Page": {
+      "name": "Page",
+      "package": "github.com/donseba/go-doc/examples/symbols",
+      "file": "models.go",
+      "line": 4,
+      "column": 6,
+      "doc": "Page is the normal page model registered from an @model contract.",
+      "fields": {
+        "Description": {
+          "type": "string",
+          "file": "models.go",
+          "line": 6,
+          "column": 2
+        },
+        "Title": {
+          "type": "string",
+          "doc": "some Title documentation",
+          "file": "models.go",
+          "line": 5,
+          "column": 2
+        }
+      }
+    }
+  },
+  "short": {
+    "Button": [
+      "github.com/donseba/go-doc/examples/symbols.Button"
+    ],
+    "Interaction": [
+      "github.com/donseba/go-doc/examples/symbols.Interaction"
+    ],
+    "Page": [
+      "github.com/donseba/go-doc/examples/symbols.Page"
+    ]
+  },
+  "symbolAliases": {
+    "component": "",
+    "interaction": "github.com/donseba/go-doc/examples/symbols.Interaction"
+  }
+}

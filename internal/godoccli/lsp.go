@@ -211,6 +211,10 @@ type lspIndex struct {
 	rootPath string
 }
 
+func (idx lspIndex) symbolParseConfig() symbolParseConfig {
+	return symbolParseConfig{Aliases: idx.SymbolAliases, Strict: idx.SymbolStrict}
+}
+
 type scope struct {
 	dotType string
 	vars    map[string]string
@@ -263,11 +267,14 @@ var (
 	lspAccessorPattern             = regexp.MustCompile(`(?:[$_A-Za-z][$_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)+|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)`)
 	lspTemplateCallRegexp          = regexp.MustCompile(`^\s*(?:template|block)\s+"([^"]+)"(?:\s+(.+?))?\s*-?\s*$`)
 	lspDefineActionRegexp          = regexp.MustCompile(`^\s*define\s+"([^"]+)"\s*$`)
-	lspLeadingDefineContractRegexp = regexp.MustCompile(`(?s)(\{\{/\*.*?@(model|dot|func).*?\*/\}\})([ \t\r\n]*)(\{\{\s*(?:-)?\s*define\s+"([^"]+)"\s*(?:-)?\s*\}\})`)
-	lspContractTypeRegexp          = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
-	lspModelPrefixRegexp           = regexp.MustCompile(`@model\s+[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z0-9_./-]*$`)
+	lspLeadingDefineContractRegexp = regexp.MustCompile(`(?s)(\{\{/\*.*?@(model|dot|func|gen|symbol).*?\*/\}\})([ \t\r\n]*)(\{\{\s*(?:-)?\s*define\s+"([^"]+)"\s*(?:-)?\s*\}\})`)
+	lspTypePrefixRegexp            = regexp.MustCompile(`@[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z0-9_./\[\]*-]*$`)
+	lspFuncPrefixRegexp            = regexp.MustCompile(`@func\s+[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z0-9_./-]*$`)
+	lspAnnotationPrefixRegexp      = regexp.MustCompile(`@\w*$`)
 	lspDotTypeRegexp               = regexp.MustCompile(`@dot\s+([A-Za-z0-9_./-]+)`)
 	lspFuncTypeRegexp              = regexp.MustCompile(`@func\s+[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z0-9_./-]+)`)
+	lspFuncDeclarationRegexp       = regexp.MustCompile(`@func\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9_./-]+)`)
+	lspUnknownShorthandRegexp      = regexp.MustCompile(`(?m)^\s*@([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
 )
 
 type templateFuncInfo struct {
@@ -354,7 +361,7 @@ func (s *lspServer) handleRequest(msg rpcMessage) (any, *rpcError) {
 		return map[string]any{
 			"capabilities": map[string]any{
 				"textDocumentSync":       2,
-				"completionProvider":     map[string]any{"triggerCharacters": []string{".", "_", "$", " "}},
+				"completionProvider":     map[string]any{"triggerCharacters": []string{".", "_", "$", " ", "@"}},
 				"hoverProvider":          true,
 				"definitionProvider":     true,
 				"renameProvider":         map[string]any{"prepareProvider": true},
@@ -949,7 +956,7 @@ func (s *lspServer) contractForURIAt(uri string, idx lspIndex, offset int) (temp
 	}
 	contract := mergeInlineContract(text, idx, templateIndex{})
 	contract = activeContractAt(text, idx, relative, contract, offset)
-	return contract, len(contract.Models) > 0 || contract.Dot != "" || len(contract.Funcs) > 0
+	return contract, contract.hasContracts()
 }
 
 func activeContractAt(text string, idx lspIndex, relative string, base templateIndex, offset int) templateIndex {
@@ -1006,14 +1013,14 @@ func activeDefineNameAt(text string, offset int) string {
 
 func mergeInlineContract(text string, idx lspIndex, base templateIndex) templateIndex {
 	text = contractScanText(contractAnnotationText(text, base))
-	inlineMatches := modelPattern.FindAllStringSubmatch(text, -1)
-	models := make(map[string]string, len(base.Models)+len(inlineMatches))
+	inlineRoots := parseTypedRootMap(text, indexConfig{SymbolAnnotations: symbolAnnotationsFromAliases(idx.SymbolAliases), SymbolStrict: idx.SymbolStrict})
+	roots := make(map[string]string, len(base.Roots)+len(inlineRoots))
 	funcs := make(map[string]string, len(base.Funcs))
 	gens := make(map[string]string, len(base.Gens))
 	dot := base.Dot
-	if len(inlineMatches) == 0 {
-		for key, value := range base.Models {
-			models[key] = value
+	if len(inlineRoots) == 0 {
+		for key, value := range base.Roots {
+			roots[key] = value
 		}
 	}
 	for key, value := range base.Funcs {
@@ -1022,13 +1029,11 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 	for key, value := range base.Gens {
 		gens[key] = value
 	}
-	for _, match := range inlineMatches {
-		name := match[1]
-		typeName := normalizeType(match[2])
+	for name, typeName := range inlineRoots {
 		if resolved := resolveGoType(idx, typeName); resolved != "" {
 			typeName = resolved
 		}
-		models[name] = typeName
+		roots[name] = typeName
 	}
 	if match := dotPattern.FindStringSubmatch(text); len(match) == 2 {
 		dot = normalizeType(match[1])
@@ -1044,10 +1049,21 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 		pkg := strings.TrimSpace(match[2])
 		gens[name] = pkg
 		if typeName, ok := ensureGeneratedNamespaceType(&idx.indexFile, name, pkg); ok {
-			models[name] = typeName
+			roots[name] = typeName
 		}
 	}
-	return templateIndex{Models: models, Dot: dot, Funcs: funcs, Gens: gens}
+	return templateIndex{Roots: roots, Dot: dot, Funcs: funcs, Gens: gens}
+}
+
+func symbolAnnotationsFromAliases(aliases map[string]string) []symbolAnnotationConfig {
+	if len(aliases) == 0 {
+		return nil
+	}
+	annotations := make([]symbolAnnotationConfig, 0, len(aliases))
+	for name, typ := range aliases {
+		annotations = append(annotations, symbolAnnotationConfig{Name: name, Type: typ})
+	}
+	return annotations
 }
 
 func contractAnnotationText(text string, base templateIndex) string {
@@ -1144,7 +1160,7 @@ func (s *lspServer) publishDiagnostics(uri string) error {
 	}
 	idx := s.indexForURI(uri)
 	contract, ok := s.contractForURI(uri, idx)
-	if !ok {
+	if !ok && !hasGoDocAnnotation(text) {
 		return s.clearDiagnostics(uri)
 	}
 	relative := ""
@@ -1152,7 +1168,18 @@ func (s *lspServer) publishDiagnostics(uri string) error {
 		relative = rel(idx.rootPath, path)
 	}
 	items := diagnosticsForTextScoped(text, idx, contract, relative)
+	if items == nil {
+		items = []diagnostic{}
+	}
 	return writeRPCNotification(s.out, "textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": items})
+}
+
+func hasGoDocAnnotation(text string) bool {
+	text = contractScanText(text)
+	return annotationPattern.MatchString(text) ||
+		dotPattern.MatchString(text) ||
+		funcPattern.MatchString(text) ||
+		genPattern.MatchString(text)
 }
 
 func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []diagnostic {
@@ -1162,22 +1189,9 @@ func diagnosticsForText(text string, idx lspIndex, contract templateIndex) []dia
 func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex, relative string) []diagnostic {
 	var items []diagnostic
 	items = append(items, leadingDefineContractDiagnostics(text)...)
-	items = append(items, modelFunctionCollisionDiagnostics(text, contract)...)
-	for _, match := range lspContractTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
-		start, end := match[2], match[3]
-		raw := text[start:end]
-		typeName := normalizeType(raw)
-		if resolveGoType(idx, typeName) == "" {
-			if _, ok := idx.Types[typeName]; !ok {
-				items = append(items, diagnostic{
-					Range:    rangeFromOffsets(text, start, end),
-					Severity: 2,
-					Source:   "go-doc",
-					Message:  fmt.Sprintf("Unknown go-doc model type '%s'", raw),
-				})
-			}
-		}
-	}
+	items = append(items, unknownShorthandDiagnostics(text, idx.symbolParseConfig())...)
+	items = append(items, typedRootCollisionDiagnostics(text, contract, idx.symbolParseConfig())...)
+	items = append(items, unusedNamedDeclarationDiagnostics(text, idx, contract, relative)...)
 	for _, match := range lspDotTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
 		start, end := match[2], match[3]
 		raw := text[start:end]
@@ -1205,6 +1219,40 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 				Severity: 2,
 				Source:   "go-doc",
 				Message:  fmt.Sprintf("Unknown go-doc function '%s'", raw),
+			})
+		}
+	}
+	for _, ref := range typedRootDeclarationRefs(text, idx.symbolParseConfig()) {
+		if ref.unknown {
+			items = append(items, diagnostic{
+				Range:    rangeFromOffsets(text, ref.annotationStart, ref.annotationEnd),
+				Severity: 2,
+				Source:   "go-doc",
+				Message:  fmt.Sprintf("Unknown go-doc annotation '@%s'", ref.annotation),
+			})
+			continue
+		}
+		if ref.typeName == "" {
+			items = append(items, diagnostic{
+				Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
+				Severity: 2,
+				Source:   "go-doc",
+				Message:  fmt.Sprintf("@%s %s needs a type or a configured default type", ref.annotation, ref.name),
+			})
+			continue
+		}
+		if ref.typeStart >= 0 {
+			if _, ok := idx.Types[ref.typeName]; ok {
+				continue
+			}
+			if resolved := resolveGoType(idx, ref.typeName); resolved != "" {
+				continue
+			}
+			items = append(items, diagnostic{
+				Range:    rangeFromOffsets(text, ref.typeStart, ref.typeEnd),
+				Severity: 2,
+				Source:   "go-doc",
+				Message:  fmt.Sprintf("Unknown go-doc typed root type '%s'", ref.typeName),
 			})
 		}
 	}
@@ -1261,7 +1309,7 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 			end := action[0] + match[1]
 			token := actionText[match[0]:match[1]]
 			root := tokenRoot(token)
-			if looksLikeModelAccessor(root) && actionContract.Models[root] == "" && actionContract.Funcs[root] == "" {
+			if looksLikeModelAccessor(root) && actionContract.Roots[root] == "" && actionContract.Funcs[root] == "" {
 				items = append(items, diagnostic{
 					Range:    rangeFromOffsets(text, start, start+len(root)),
 					Severity: 1,
@@ -1292,29 +1340,143 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 	return items
 }
 
-func modelFunctionCollisionDiagnostics(text string, contract templateIndex) []diagnostic {
+func typedRootCollisionDiagnostics(text string, contract templateIndex, symbols symbolParseConfig) []diagnostic {
 	var items []diagnostic
-	for _, match := range modelPattern.FindAllStringSubmatchIndex(text, -1) {
-		nameStart, nameEnd := match[2], match[3]
-		name := text[nameStart:nameEnd]
+	for _, ref := range typedRootDeclarationRefs(text, symbols) {
+		if ref.unknown {
+			continue
+		}
 		switch {
-		case builtInTemplateFuncs[name].Signature != "":
+		case builtInTemplateFuncs[ref.name].Signature != "":
 			items = append(items, diagnostic{
-				Range:    rangeFromOffsets(text, nameStart, nameEnd),
+				Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
 				Severity: 1,
 				Source:   "go-doc",
-				Message:  fmt.Sprintf("Model name '%s' collides with built-in template function '%s'", name, name),
+				Message:  fmt.Sprintf("Typed root name '%s' collides with built-in template function '%s'", ref.name, ref.name),
 			})
-		case contract.Funcs[name] != "":
+		case contract.Funcs[ref.name] != "":
 			items = append(items, diagnostic{
-				Range:    rangeFromOffsets(text, nameStart, nameEnd),
+				Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
 				Severity: 1,
 				Source:   "go-doc",
-				Message:  fmt.Sprintf("Model name '%s' collides with template function '%s'", name, name),
+				Message:  fmt.Sprintf("Typed root name '%s' collides with template function '%s'", ref.name, ref.name),
 			})
 		}
 	}
 	return items
+}
+
+func unusedNamedDeclarationDiagnostics(text string, idx lspIndex, contract templateIndex, relative string) []diagnostic {
+	usedRoots, usedFuncs := usedNamedDeclarations(text, idx, contract, relative)
+	var items []diagnostic
+
+	for _, ref := range typedRootDeclarationRefs(text, idx.symbolParseConfig()) {
+		if ref.unknown || ref.name == "" || contract.Roots[ref.name] == "" {
+			continue
+		}
+		if usedRoots[ref.name] {
+			continue
+		}
+		items = append(items, diagnostic{
+			Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
+			Severity: 2,
+			Source:   "go-doc",
+			Message:  fmt.Sprintf("Typed root '%s' is declared but not used", ref.name),
+		})
+	}
+
+	for _, ref := range funcDeclarationRefs(text) {
+		if ref.name == "" || contract.Funcs[ref.name] == "" {
+			continue
+		}
+		if usedFuncs[ref.name] {
+			continue
+		}
+		items = append(items, diagnostic{
+			Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
+			Severity: 2,
+			Source:   "go-doc",
+			Message:  fmt.Sprintf("Function '%s' is declared but not used", ref.name),
+		})
+	}
+
+	return items
+}
+
+func usedNamedDeclarations(text string, idx lspIndex, contract templateIndex, relative string) (map[string]bool, map[string]bool) {
+	usedRoots := make(map[string]bool)
+	usedFuncs := make(map[string]bool)
+	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
+		actionText := text[action[0]:action[1]]
+		if isTemplateCommentAction(actionText) {
+			continue
+		}
+		actionContract := activeContractAt(text, idx, relative, contract, action[0])
+		for _, token := range templateFunctionTokensInAction(actionText, idx, actionContract) {
+			switch {
+			case actionContract.Roots[token.name] != "":
+				usedRoots[token.name] = true
+			case actionContract.Funcs[token.name] != "":
+				usedFuncs[token.name] = true
+			}
+		}
+		for _, match := range lspAccessorPattern.FindAllStringIndex(actionText, -1) {
+			if inQuotedString(actionText, match[0]) {
+				continue
+			}
+			root := tokenRoot(actionText[match[0]:match[1]])
+			if actionContract.Roots[root] != "" {
+				usedRoots[root] = true
+			}
+		}
+	}
+	return usedRoots, usedFuncs
+}
+
+type funcDeclRef struct {
+	name      string
+	nameStart int
+	nameEnd   int
+}
+
+func funcDeclarationRefs(text string) []funcDeclRef {
+	var refs []funcDeclRef
+	for _, match := range lspFuncDeclarationRegexp.FindAllStringSubmatchIndex(text, -1) {
+		refs = append(refs, funcDeclRef{
+			name:      text[match[2]:match[3]],
+			nameStart: match[2],
+			nameEnd:   match[3],
+		})
+	}
+	return refs
+}
+
+func unknownShorthandDiagnostics(text string, symbols symbolParseConfig) []diagnostic {
+	var items []diagnostic
+	for _, match := range lspUnknownShorthandRegexp.FindAllStringSubmatchIndex(text, -1) {
+		annotation := text[match[2]:match[3]]
+		value := text[match[4]:match[5]]
+		if reservedContractAnnotation(annotation) {
+			continue
+		}
+		if _, known := symbols.Aliases[annotation]; known {
+			continue
+		}
+		if !looksLikeTypePath(value) {
+			continue
+		}
+		items = append(items, diagnostic{
+			Range:    rangeFromOffsets(text, match[2], match[3]),
+			Severity: 2,
+			Source:   "go-doc",
+			Message:  fmt.Sprintf("Unknown go-doc annotation '@%s'; configure it in symbolAnnotations or use a named typed root", annotation),
+		})
+	}
+	return items
+}
+
+func looksLikeTypePath(value string) bool {
+	return strings.Contains(value, ".") || strings.Contains(value, "/")
 }
 
 func leadingDefineContractDiagnostics(text string) []diagnostic {
@@ -1434,11 +1596,11 @@ func inlineDefineContractByName(text string, idx lspIndex, name, source string) 
 			continue
 		}
 		body := text[block.bodyStart:block.bodyEnd]
-		models := parseModels(body)
+		roots := parseTypedRootMap(body, indexConfig{SymbolAnnotations: symbolAnnotationsFromAliases(idx.SymbolAliases), SymbolStrict: idx.SymbolStrict})
 		dot := parseDot(body)
 		funcs := parseFuncs(body)
 		gens := parseGens(body)
-		if len(models) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
+		if len(roots) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
 			return templateIndex{}, false
 		}
 		if dot != "" {
@@ -1446,20 +1608,20 @@ func inlineDefineContractByName(text string, idx lspIndex, name, source string) 
 				dot = resolved
 			}
 		}
-		for model, typeName := range models {
+		for name, typeName := range roots {
 			if resolved := resolveGoType(idx, typeName); resolved != "" {
-				models[model] = resolved
+				roots[name] = resolved
 			}
 		}
 		for name, pkg := range gens {
 			if typeName, ok := ensureGeneratedNamespaceType(&idx.indexFile, name, pkg); ok {
-				models[name] = typeName
+				roots[name] = typeName
 			}
 		}
 		line, column := lineColumn(text, block.start)
 		return templateIndex{
 			Name:   name,
-			Models: models,
+			Roots:  roots,
 			Dot:    dot,
 			Funcs:  funcs,
 			Gens:   gens,
@@ -2127,7 +2289,13 @@ func (s *lspServer) completions(params textDocumentPositionParams) []completionI
 	}
 	idx := s.indexForURI(params.TextDocument.URI)
 	offset := offsetAt(text, params.Position)
-	if inModelTypePosition(text, offset) {
+	if inAnnotationNamePosition(text, offset) {
+		return annotationCompletionItems(idx)
+	}
+	if inFuncTypePosition(text, offset) {
+		return functionCompletionItems(idx)
+	}
+	if inDeclarationTypePosition(text, offset) {
 		return typeCompletionItems(idx)
 	}
 	contract, ok := s.contractForURIAt(params.TextDocument.URI, idx, offset)
@@ -2224,15 +2392,15 @@ func inTemplateActionBeforeCaret(text string, offset int) bool {
 }
 
 func accessorCompletionItems(idx lspIndex, contract templateIndex, prefix string) []completionItem {
-	names := make([]string, 0, len(builtInTemplateFuncs)+len(contract.Models)+len(contract.Funcs))
-	seen := make(map[string]bool, len(builtInTemplateFuncs)+len(contract.Models)+len(contract.Funcs))
-	for name := range contract.Models {
+	names := make([]string, 0, len(builtInTemplateFuncs)+len(contract.Roots)+len(contract.Funcs)+len(contract.Roots))
+	seen := make(map[string]bool, len(builtInTemplateFuncs)+len(contract.Roots)+len(contract.Funcs)+len(contract.Roots))
+	for name := range contract.Funcs {
 		if strings.HasPrefix(name, prefix) && !seen[name] {
 			names = append(names, name)
 			seen[name] = true
 		}
 	}
-	for name := range contract.Funcs {
+	for _, name := range contract.typedRootNames() {
 		if strings.HasPrefix(name, prefix) && !seen[name] {
 			names = append(names, name)
 			seen[name] = true
@@ -2272,31 +2440,92 @@ func accessorCompletionItems(idx lspIndex, contract templateIndex, prefix string
 			})
 			continue
 		}
-		typeName := contract.Models[name]
-		typ := idx.Types[typeName]
-		detail := typeName
-		doc := ""
-		if typ.Name != "" {
-			detail = typ.Name
-			doc = typ.Doc
+		if typeName, kind, ok := contract.typedRootType(name); ok {
+			typ := idx.Types[typeName]
+			detail := typeName
+			doc := ""
+			itemKind := 6
+			if kind == "symbol" {
+				doc = "Runtime-provided template symbol."
+				itemKind = 3
+			}
+			if typ.Name != "" {
+				detail = typ.Name
+				if typ.Doc != "" {
+					doc = typ.Doc
+				}
+			}
+			items = append(items, completionItem{
+				Label:         name,
+				Kind:          itemKind,
+				Detail:        detail,
+				Documentation: doc,
+				InsertText:    name,
+			})
+			continue
 		}
-		items = append(items, completionItem{
-			Label:         name,
-			Kind:          6,
-			Detail:        detail,
-			Documentation: doc,
-			InsertText:    name,
-		})
 	}
 	return items
 }
 
-func inModelTypePosition(text string, offset int) bool {
+func inDeclarationTypePosition(text string, offset int) bool {
 	before := text[:max(0, min(offset, len(text)))]
 	if len(before) > 300 {
 		before = before[len(before)-300:]
 	}
-	return lspModelPrefixRegexp.MatchString(before)
+	return lspTypePrefixRegexp.MatchString(before)
+}
+
+func inFuncTypePosition(text string, offset int) bool {
+	before := text[:max(0, min(offset, len(text)))]
+	if len(before) > 300 {
+		before = before[len(before)-300:]
+	}
+	return lspFuncPrefixRegexp.MatchString(before)
+}
+
+func inAnnotationNamePosition(text string, offset int) bool {
+	before := text[:max(0, min(offset, len(text)))]
+	if len(before) > 80 {
+		before = before[len(before)-80:]
+	}
+	if !lspAnnotationPrefixRegexp.MatchString(before) {
+		return false
+	}
+	lineStart := strings.LastIndex(before, "\n")
+	line := before
+	if lineStart >= 0 {
+		line = before[lineStart+1:]
+	}
+	return strings.TrimSpace(strings.TrimPrefix(line, "@")) == strings.TrimPrefix(strings.TrimSpace(line), "@")
+}
+
+func annotationCompletionItems(idx lspIndex) []completionItem {
+	names := []string{"model", "dot", "func", "gen", "symbol"}
+	for name := range idx.SymbolAliases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	items := make([]completionItem, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		detail := "go-doc annotation"
+		doc := ""
+		if typ, ok := idx.SymbolAliases[name]; ok {
+			detail = "configured symbol annotation"
+			if typ != "" {
+				doc = "Defaults to " + typ
+			} else {
+				doc = "Requires an explicit type in the template."
+			}
+		}
+		items = append(items, completionItem{Label: name, Kind: 14, Detail: detail, Documentation: doc})
+	}
+	return items
 }
 
 func typeCompletionItems(idx lspIndex) []completionItem {
@@ -2319,6 +2548,31 @@ func typeCompletionItems(idx lspIndex) []completionItem {
 			Kind:          7,
 			Detail:        typ.Package,
 			Documentation: typ.Doc,
+		})
+	}
+	return items
+}
+
+func functionCompletionItems(idx lspIndex) []completionItem {
+	names := make([]string, 0, len(idx.Funcs))
+	for name := range idx.Funcs {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		left, right := idx.Funcs[names[i]], idx.Funcs[names[j]]
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+		return names[i] < names[j]
+	})
+	items := make([]completionItem, 0, len(names))
+	for _, fullName := range names {
+		fn := idx.Funcs[fullName]
+		items = append(items, completionItem{
+			Label:         fullName,
+			Kind:          3,
+			Detail:        fn.Package,
+			Documentation: fn.Doc,
 		})
 	}
 	return items
@@ -2371,15 +2625,24 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 	if !ok {
 		return nil
 	}
-	if ref, ok := modelNameReferenceAt(text, offset, contract); ok {
-		typeName := contract.Models[ref.name]
+	if ref, ok := typedRootNameReferenceAt(text, offset, contract, idx.symbolParseConfig()); ok {
+		typeName, kind, _ := contract.typedRootType(ref.name)
 		typ := idx.Types[typeName]
 		detail := typeName
+		doc := typ.Doc
+		fence := "go"
+		if kind == "symbol" {
+			doc = "Runtime-provided template symbol."
+			fence = "gotemplate"
+		}
 		if typ.Name != "" {
 			detail = typ.Name
+			if typ.Doc != "" {
+				doc = typ.Doc
+			}
 		}
 		return hover{
-			Contents: markdown(fmt.Sprintf("```go\n%s\n```\n%s", detail, typ.Doc)),
+			Contents: markdown(fmt.Sprintf("```%s\n%s\n```\n%s", fence, detail, doc)),
 			Range:    rangeFromOffsets(text, ref.start, ref.end),
 		}
 	}
@@ -2459,9 +2722,11 @@ func (s *lspServer) definition(params textDocumentPositionParams) any {
 	if !ok {
 		return nil
 	}
-	if ref, ok := modelNameReferenceAt(text, offset, contract); ok {
-		typ := idx.Types[contract.Models[ref.name]]
-		return locationForTarget(idx.rootPath, typ.File, typ.Line, typ.Column)
+	if ref, ok := typedRootNameReferenceAt(text, offset, contract, idx.symbolParseConfig()); ok {
+		if typeName, _, ok := contract.typedRootType(ref.name); ok {
+			typ := idx.Types[typeName]
+			return locationForTarget(idx.rootPath, typ.File, typ.Line, typ.Column)
+		}
 	}
 	if name, _, _, ok := templateFunctionAt(text, offset, idx, contract); ok {
 		if fnName := contract.Funcs[name]; fnName != "" {
@@ -2501,7 +2766,7 @@ func (s *lspServer) prepareRename(params textDocumentPositionParams) any {
 	if !ok {
 		return nil
 	}
-	ref, ok := modelNameReferenceAt(text, offsetAt(text, params.Position), contract)
+	ref, ok := typedRootNameReferenceAt(text, offsetAt(text, params.Position), contract, idx.symbolParseConfig())
 	if !ok {
 		return nil
 	}
@@ -2522,11 +2787,11 @@ func (s *lspServer) rename(params renameParams) any {
 	if !ok {
 		return workspaceEdit{Changes: map[string][]textEdit{}}
 	}
-	ref, ok := modelNameReferenceAt(text, offsetAt(text, params.Position), contract)
+	ref, ok := typedRootNameReferenceAt(text, offsetAt(text, params.Position), contract, idx.symbolParseConfig())
 	if !ok || ref.name == newName {
 		return workspaceEdit{Changes: map[string][]textEdit{}}
 	}
-	edits := modelRenameEdits(text, contract, ref.name, newName)
+	edits := typedRootRenameEdits(text, contract, ref.name, newName)
 	return workspaceEdit{Changes: map[string][]textEdit{params.TextDocument.URI: edits}}
 }
 
@@ -2562,7 +2827,7 @@ func (s *lspServer) codeActions(params codeActionParams) []codeAction {
 				actions = append(actions, action)
 				seen[action.Title] = true
 			}
-		case strings.HasPrefix(item.Message, "Unknown go-doc model type "):
+		case strings.HasPrefix(item.Message, "Unknown go-doc typed root type "):
 			action, ok := missingModelCodeAction(idx, item)
 			if ok && !seen[action.Title] {
 				actions = append(actions, action)
@@ -2840,11 +3105,15 @@ func (s *lspServer) documentSymbols(params documentSymbolParams) []documentSymbo
 		return nil
 	}
 	var symbols []documentSymbol
-	for name, typeName := range contract.Models {
+	for _, name := range contract.typedRootNames() {
+		typeName, kind, _ := contract.typedRootType(name)
 		rng := lspRange{Start: position{}, End: position{}}
-		symbols = append(symbols, documentSymbol{Name: name, Detail: typeName, Kind: 13, Range: rng, SelectionRange: rng})
+		symbolKind := 13
+		if kind == "symbol" {
+			symbolKind = 12
+		}
+		symbols = append(symbols, documentSymbol{Name: name, Detail: typeName, Kind: symbolKind, Range: rng, SelectionRange: rng})
 	}
-	sort.Slice(symbols, func(i, j int) bool { return symbols[i].Name < symbols[j].Name })
 	return symbols
 }
 
@@ -2869,17 +3138,19 @@ func semanticTokensForText(text string, idx lspIndex, contract templateIndex) []
 
 func semanticTokensForTextScoped(text string, idx lspIndex, contract templateIndex, relative string) []semanticToken {
 	var tokens []semanticToken
-	for _, match := range lspContractTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
-		start, end := match[2], match[3]
-		raw := text[start:end]
-		typeName := normalizeType(raw)
-		if resolveGoType(idx, typeName) == "" {
-			if _, ok := idx.Types[typeName]; !ok {
-				continue
+	for _, ref := range typedRootDeclarationRefs(text, idx.symbolParseConfig()) {
+		if ref.unknown {
+			continue
+		}
+		if contract.Roots[ref.name] != "" {
+			tokens = append(tokens, semanticToken{start: ref.nameStart, length: ref.nameEnd - ref.nameStart, tokenType: semanticAccessor})
+		}
+		if ref.typeStart >= 0 && ref.typeName != "" {
+			if resolveGoType(idx, ref.typeName) != "" || idx.Types[ref.typeName].Name != "" {
+				shortStart := ref.typeStart + len(ref.typeName) - len(shortTypeName(ref.typeName))
+				tokens = append(tokens, semanticToken{start: shortStart, length: ref.typeEnd - shortStart, tokenType: semanticType})
 			}
 		}
-		shortStart := start + len(raw) - len(shortTypeName(raw))
-		tokens = append(tokens, semanticToken{start: shortStart, length: end - shortStart, tokenType: semanticType})
 	}
 	for _, match := range lspDotTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
 		start, end := match[2], match[3]
@@ -2903,6 +3174,26 @@ func semanticTokensForTextScoped(text string, idx lspIndex, contract templateInd
 		shortStart := start + len(raw) - len(shortTypeName(raw))
 		tokens = append(tokens, semanticToken{start: shortStart, length: end - shortStart, tokenType: semanticFunction})
 	}
+	for _, match := range lspFuncDeclarationRegexp.FindAllStringSubmatchIndex(text, -1) {
+		nameStart, nameEnd := match[2], match[3]
+		funcType := normalizeType(text[match[4]:match[5]])
+		if _, ok := idx.Funcs[funcType]; !ok {
+			continue
+		}
+		tokens = append(tokens, semanticToken{start: nameStart, length: nameEnd - nameStart, tokenType: semanticFunction})
+	}
+	for _, ref := range typedRootDeclarationRefs(text, idx.symbolParseConfig()) {
+		if ref.unknown {
+			continue
+		}
+		if ref.typeStart >= 0 && ref.typeName != "" {
+			if resolveGoType(idx, ref.typeName) != "" || idx.Types[ref.typeName].Name != "" {
+				shortStart := ref.typeStart + len(ref.typeName) - len(shortTypeName(ref.typeName))
+				tokens = append(tokens, semanticToken{start: shortStart, length: ref.typeEnd - shortStart, tokenType: semanticType})
+			}
+		}
+		tokens = append(tokens, semanticToken{start: ref.nameStart, length: ref.nameEnd - ref.nameStart, tokenType: semanticFunction})
+	}
 	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
 		actionText := text[action[0]:action[1]]
 		if isTemplateCommentAction(actionText) {
@@ -2920,7 +3211,7 @@ func semanticTokensForTextScoped(text string, idx lspIndex, contract templateInd
 			end := action[0] + match[1]
 			token := actionText[match[0]:match[1]]
 			root := tokenRoot(token)
-			if actionContract.Models[root] != "" || actionContract.Funcs[root] != "" || strings.HasPrefix(root, "$") {
+			if _, _, ok := actionContract.typedRootType(root); ok || actionContract.Funcs[root] != "" || strings.HasPrefix(root, "$") {
 				tokens = append(tokens, semanticToken{start: start, length: len(root), tokenType: semanticAccessor})
 			}
 			for _, ref := range fieldReferencesForToken(text, start, end, idx, actionContract) {
@@ -3017,6 +3308,10 @@ func templateFunctionTokensInAction(actionText string, idx lspIndex, contract te
 			if _, ok := idx.Funcs[fn]; ok {
 				tokens = append(tokens, templateFunctionToken{name: name, start: tokenStart, end: cursor})
 			}
+			continue
+		}
+		if contract.Roots[name] != "" {
+			tokens = append(tokens, templateFunctionToken{name: name, start: tokenStart, end: cursor})
 		}
 	}
 	return tokens
@@ -3034,6 +3329,9 @@ func templateFunctionInAction(actionText string, idx lspIndex, contract template
 		if _, ok := idx.Funcs[fn]; ok {
 			return name, start, end, true
 		}
+	}
+	if contract.Roots[name] != "" {
+		return name, start, end, true
 	}
 	return "", 0, 0, false
 }
@@ -3194,13 +3492,13 @@ func resolveExpressionValueType(idx lspIndex, contract templateIndex, expression
 	var path []string
 	switch {
 	case strings.HasPrefix(root, "$"):
-		rootType = contract.Models[root]
+		rootType = contractRootType(contract, root)
 		path = parts[1:]
 	case strings.HasPrefix(clean, "."):
 		rootType = dotType
 		path = parts
 	default:
-		rootType = contract.Models[root]
+		rootType = contractRootType(contract, root)
 		path = parts[1:]
 		if rootType == "" {
 			rootType = functionResultValueType(idx, contract, root)
@@ -3210,6 +3508,16 @@ func resolveExpressionValueType(idx lspIndex, contract templateIndex, expression
 		return ""
 	}
 	return resolveFieldValuePath(idx, rootType, path)
+}
+
+func contractRootType(contract templateIndex, root string) string {
+	if root == "" {
+		return ""
+	}
+	if typeName, _, ok := contract.typedRootType(root); ok {
+		return typeName
+	}
+	return ""
 }
 
 func resolveExpressionType(idx lspIndex, contract templateIndex, expression, dotType string) string {
@@ -3567,7 +3875,7 @@ func fieldTargetBeforeCaret(text string, offset int, idx lspIndex, contract temp
 	parts := strings.FieldsFunc(chain, func(r rune) bool { return r == '.' })
 	if !strings.HasPrefix(chain, ".") {
 		vars := scopeAt(text, offset, idx, contract).vars
-		rootType := contract.Models[parts[0]]
+		rootType := contractRootType(contract, parts[0])
 		if rootType == "" {
 			rootType = vars[parts[0]]
 		}
@@ -3627,7 +3935,7 @@ func fieldReferencesForToken(text string, start, end int, idx lspIndex, contract
 		}
 	} else {
 		root := token[ranges[0].start-start : ranges[0].end-start]
-		rootType = contract.Models[root]
+		rootType = contractRootType(contract, root)
 		if rootType == "" {
 			rootType = scope.vars[root]
 		}
@@ -3745,28 +4053,6 @@ func matchingOpenParen(text string, close int) int {
 }
 
 func typeReferenceAt(text string, offset int, idx lspIndex) (typeRef, bool) {
-	for _, match := range lspContractTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
-		start, end := match[2], match[3]
-		if offset < start || offset > end {
-			continue
-		}
-		raw := text[start:end]
-		typeName := resolveGoType(idx, raw)
-		if typeName == "" {
-			if _, ok := idx.Types[raw]; ok {
-				typeName = raw
-			}
-		}
-		if typeName == "" {
-			return typeRef{}, false
-		}
-		shortStart := start + len(raw) - len(shortTypeName(raw))
-		if offset < shortStart {
-			return typeRef{}, false
-		}
-		start = shortStart
-		return typeRef{typeName: typeName, start: start, end: end}, true
-	}
 	for _, match := range lspDotTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
 		start, end := match[2], match[3]
 		if offset < start || offset > end {
@@ -3788,6 +4074,28 @@ func typeReferenceAt(text string, offset int, idx lspIndex) (typeRef, bool) {
 		}
 		start = shortStart
 		return typeRef{typeName: typeName, start: start, end: end}, true
+	}
+	for _, ref := range typedRootDeclarationRefs(text, idx.symbolParseConfig()) {
+		if ref.unknown {
+			continue
+		}
+		if ref.typeStart < 0 || offset < ref.typeStart || offset > ref.typeEnd {
+			continue
+		}
+		typeName := resolveGoType(idx, ref.typeName)
+		if typeName == "" {
+			if _, ok := idx.Types[ref.typeName]; ok {
+				typeName = ref.typeName
+			}
+		}
+		if typeName == "" {
+			return typeRef{}, false
+		}
+		shortStart := ref.typeStart + len(ref.typeName) - len(shortTypeName(ref.typeName))
+		if offset < shortStart {
+			return typeRef{}, false
+		}
+		return typeRef{typeName: typeName, start: shortStart, end: ref.typeEnd}, true
 	}
 	return typeRef{}, false
 }
@@ -3812,11 +4120,13 @@ func funcReferenceAt(text string, offset int, idx lspIndex) (funcRef, bool) {
 	return funcRef{}, false
 }
 
-func modelNameReferenceAt(text string, offset int, contract templateIndex) (modelNameRef, bool) {
-	for _, match := range modelPattern.FindAllStringSubmatchIndex(text, -1) {
-		start, end := match[2], match[3]
-		if offset >= start && offset <= end {
-			return modelNameRef{name: text[start:end], start: start, end: end}, true
+func typedRootNameReferenceAt(text string, offset int, contract templateIndex, symbols symbolParseConfig) (modelNameRef, bool) {
+	for _, ref := range typedRootDeclarationRefs(text, symbols) {
+		if ref.unknown {
+			continue
+		}
+		if offset >= ref.nameStart && offset <= ref.nameEnd {
+			return modelNameRef{name: ref.name, start: ref.nameStart, end: ref.nameEnd}, true
 		}
 	}
 
@@ -3825,7 +4135,10 @@ func modelNameReferenceAt(text string, offset int, contract templateIndex) (mode
 		return modelNameRef{}, false
 	}
 	parts := strings.FieldsFunc(token, func(r rune) bool { return r == '.' })
-	if strings.HasPrefix(token, ".") || len(parts) == 0 || contract.Models[parts[0]] == "" {
+	if strings.HasPrefix(token, ".") || len(parts) == 0 {
+		return modelNameRef{}, false
+	}
+	if _, _, ok := contract.typedRootType(parts[0]); !ok {
 		return modelNameRef{}, false
 	}
 	rootEnd := start + len(parts[0])
@@ -3835,7 +4148,69 @@ func modelNameReferenceAt(text string, offset int, contract templateIndex) (mode
 	return modelNameRef{name: parts[0], start: start, end: rootEnd}, true
 }
 
-func modelRenameEdits(text string, contract templateIndex, oldName, newName string) []textEdit {
+type symbolDeclRef struct {
+	annotation      string
+	name            string
+	typeName        string
+	annotationStart int
+	annotationEnd   int
+	nameStart       int
+	nameEnd         int
+	typeStart       int
+	typeEnd         int
+	unknown         bool
+}
+
+func typedRootDeclarationRefs(text string, symbols symbolParseConfig) []symbolDeclRef {
+	var refs []symbolDeclRef
+	for _, match := range annotationPattern.FindAllStringSubmatchIndex(text, -1) {
+		annotation := text[match[2]:match[3]]
+		if reservedContractAnnotation(annotation) {
+			continue
+		}
+		defaultType, known := symbols.Aliases[annotation]
+		unknown := !known
+		if unknown && symbols.Strict {
+			refs = append(refs, symbolDeclRef{
+				annotation:      annotation,
+				annotationStart: match[2],
+				annotationEnd:   match[3],
+				name:            text[match[4]:match[5]],
+				nameStart:       match[4],
+				nameEnd:         match[5],
+				typeStart:       -1,
+				typeEnd:         -1,
+				unknown:         true,
+			})
+			continue
+		}
+		name := text[match[4]:match[5]]
+		typeName := defaultType
+		typeStart, typeEnd := -1, -1
+		if match[6] >= 0 && match[7] >= 0 {
+			typeStart, typeEnd = match[6], match[7]
+			typeName = normalizeType(text[typeStart:typeEnd])
+		}
+		if unknown && typeName == "" {
+			continue
+		}
+		refs = append(refs, symbolDeclRef{
+			annotation:      annotation,
+			name:            name,
+			typeName:        typeName,
+			annotationStart: match[2],
+			annotationEnd:   match[3],
+			nameStart:       match[4],
+			nameEnd:         match[5],
+			typeStart:       typeStart,
+			typeEnd:         typeEnd,
+		})
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].nameStart < refs[j].nameStart })
+	return refs
+}
+
+func typedRootRenameEdits(text string, contract templateIndex, oldName, newName string) []textEdit {
 	var edits []textEdit
 	add := func(start, end int) {
 		edits = append(edits, textEdit{
@@ -3844,10 +4219,9 @@ func modelRenameEdits(text string, contract templateIndex, oldName, newName stri
 		})
 	}
 
-	for _, match := range modelPattern.FindAllStringSubmatchIndex(text, -1) {
-		start, end := match[2], match[3]
-		if text[start:end] == oldName {
-			add(start, end)
+	for _, ref := range typedRootDeclarationRefs(text, symbolParseConfig{}) {
+		if ref.name == oldName {
+			add(ref.nameStart, ref.nameEnd)
 		}
 	}
 	for _, action := range lspActionPattern.FindAllStringIndex(text, -1) {
@@ -3859,7 +4233,7 @@ func modelRenameEdits(text string, contract templateIndex, oldName, newName stri
 			tokenStart := action[0] + match[0]
 			token := actionText[match[0]:match[1]]
 			parts := strings.FieldsFunc(token, func(r rune) bool { return r == '.' })
-			if !strings.HasPrefix(token, ".") && len(parts) > 0 && parts[0] == oldName && contract.Models[oldName] != "" {
+			if !strings.HasPrefix(token, ".") && len(parts) > 0 && parts[0] == oldName && contract.Roots[oldName] != "" {
 				add(tokenStart, tokenStart+len(oldName))
 			}
 		}

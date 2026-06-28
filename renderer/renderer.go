@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/donseba/go-doc/internal/godoccli"
 )
 
 // Mode controls when template contracts are read.
@@ -19,8 +21,9 @@ type Mode string
 const (
 	// Development scans template files every time Register is called.
 	//
-	// Use this while editing templates: changing @model Page to @model Dashboard
-	// is picked up on the next render without restarting the process.
+	// Use this while editing templates: changing @model Page to @struct Dashboard
+	// or any other typed-root declaration is picked up on the next render
+	// without restarting the process.
 	Development Mode = "development"
 
 	// Production scans template files once when the Renderer is created.
@@ -37,7 +40,7 @@ type Config struct {
 	Funcs template.FuncMap
 }
 
-// Renderer registers go-doc model accessors for one template set.
+// Renderer registers go-doc typed-root accessors for one template set.
 //
 // Controllers can call Register the same way in development and production; the
 // mode only changes when template contracts are scanned.
@@ -51,7 +54,7 @@ type Renderer struct {
 // Binding binds a Go value to a template function name.
 //
 // For contract-driven rendering, prefer RegisterFromFiles or
-// RegisterFromContracts. They register @model declarations directly as
+// RegisterFromContracts. They register typed-root declarations directly as
 // template accessors.
 type Binding struct {
 	Name  string
@@ -62,24 +65,24 @@ type Binding struct {
 // used with RegisterFromLookup.
 type LookupFunc[K comparable, V any] = func(K) V
 
-// ModelLookupFunc resolves a declared @model type name to a Go value.
+// RootLookupFunc resolves a declared typed-root type name to a Go value.
 //
 // The key is the normalized contract type, for example:
 //
 //	github.com/example/app.Page
-type ModelLookupFunc = LookupFunc[string, any]
+type RootLookupFunc = LookupFunc[string, any]
 
-// Contracts contains template @model declarations scanned from files.
+// Contracts contains typed-root declarations scanned from files.
 //
 // Create it once at startup for production-style rendering, then reuse it for
 // each request with Register. Use RegisterFromFiles directly when you want
 // development-style rendering that re-reads declarations before each parse.
 type Contracts struct {
-	models map[string]string
+	roots map[string]string
 }
 
-// Model creates a model binding.
-func Model(name string, value any) Binding {
+// Root creates a typed-root binding.
+func Root(name string, value any) Binding {
 	return Binding{Name: name, Value: value}
 }
 
@@ -106,11 +109,11 @@ func New(config Config) (Renderer, error) {
 		r.contracts = contracts
 		return r, nil
 	default:
-		return Renderer{}, fmt.Errorf("register models: unknown renderer mode %q", mode)
+		return Renderer{}, fmt.Errorf("register typed roots: unknown renderer mode %q", mode)
 	}
 }
 
-// Register installs model accessors on tmpl using the configured mode.
+// Register installs typed-root accessors on tmpl using the configured mode.
 func (r Renderer) Register(tmpl *template.Template, values ...any) error {
 	if err := UseFuncs(tmpl, r.funcs); err != nil {
 		return err
@@ -121,7 +124,7 @@ func (r Renderer) Register(tmpl *template.Template, values ...any) error {
 	case Production:
 		return r.contracts.Register(tmpl, values...)
 	default:
-		return fmt.Errorf("register models: unknown renderer mode %q", r.mode)
+		return fmt.Errorf("register typed roots: unknown renderer mode %q", r.mode)
 	}
 }
 
@@ -146,30 +149,30 @@ func UseFuncs(tmpl *template.Template, funcs template.FuncMap) (err error) {
 	return nil
 }
 
-// Register installs model accessors on an existing template.
+// Register installs typed-root accessors on an existing template.
 //
 // Call Register before parsing templates, just like html/template.Funcs:
 //
 //	tmpl := template.New("dashboard.gohtml")
-//	err := renderer.Register(tmpl, renderer.Model("page", page))
+//	err := renderer.Register(tmpl, renderer.Root("Page", page))
 //	_, err = tmpl.ParseFiles("templates/dashboard.gohtml")
 //
 // Register mutates tmpl and only returns an error when a binding is invalid or
 // html/template rejects the generated function map.
-func Register(tmpl *template.Template, models ...Binding) (err error) {
+func Register(tmpl *template.Template, roots ...Binding) (err error) {
 	if tmpl == nil {
-		return fmt.Errorf("register models: nil template")
+		return fmt.Errorf("register typed roots: nil template")
 	}
-	funcs := make(template.FuncMap, len(models))
-	for _, model := range models {
-		name := strings.TrimSpace(model.Name)
-		if !validModelName(name) {
-			return fmt.Errorf("register models: invalid model name %q", model.Name)
+	funcs := make(template.FuncMap, len(roots))
+	for _, root := range roots {
+		name := strings.TrimSpace(root.Name)
+		if !validRootName(name) {
+			return fmt.Errorf("register typed roots: invalid root name %q", root.Name)
 		}
 		if _, exists := funcs[name]; exists {
-			return fmt.Errorf("register models: duplicate model name %q", name)
+			return fmt.Errorf("register typed roots: duplicate root name %q", name)
 		}
-		captured := model.Value
+		captured := root.Value
 		funcs[name] = func() any {
 			return captured
 		}
@@ -177,17 +180,17 @@ func Register(tmpl *template.Template, models ...Binding) (err error) {
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("register models: %v", recovered)
+			err = fmt.Errorf("register typed roots: %v", recovered)
 		}
 	}()
 	tmpl.Funcs(funcs)
 	return nil
 }
 
-// RegisterFromFiles scans @model declarations in template files and registers
+// RegisterFromFiles scans typed-root declarations in template files and registers
 // them by matching those declarations to the provided Go values.
 //
-// The template contract owns the public model name:
+// The template contract owns the public typed-root name:
 //
 //	{{/*
 //	@model Page github.com/example/app.Page
@@ -209,57 +212,57 @@ func RegisterFromFiles(tmpl *template.Template, values []any, files ...string) e
 	return contracts.Register(tmpl, values...)
 }
 
-// RegisterFromContracts registers model accessors from a parsed contract map.
+// RegisterFromContracts registers typed-root accessors from a parsed contract map.
 // It is useful when an application already has contract metadata.
 func RegisterFromContracts(tmpl *template.Template, contracts map[string]string, values ...any) error {
-	return Contracts{models: maps.Clone(contracts)}.Register(tmpl, values...)
+	return Contracts{roots: maps.Clone(contracts)}.Register(tmpl, values...)
 }
 
-// Register registers model accessors from a pre-scanned contract set.
+// Register registers typed-root accessors from a pre-scanned contract set.
 func (contracts Contracts) Register(tmpl *template.Template, values ...any) error {
-	lookup, err := NewModelLookup(values...)
+	lookup, err := NewRootLookup(values...)
 	if err != nil {
 		return err
 	}
 	return contracts.RegisterFromLookup(tmpl, lookup)
 }
 
-// RegisterFromLookup registers model accessors from a pre-scanned contract set
+// RegisterFromLookup registers typed-root accessors from a pre-scanned contract set
 // using a custom type lookup.
-func (contracts Contracts) RegisterFromLookup(tmpl *template.Template, lookup ModelLookupFunc) error {
-	return RegisterFromLookup(tmpl, contracts.models, lookup)
+func (contracts Contracts) RegisterFromLookup(tmpl *template.Template, lookup RootLookupFunc) error {
+	return RegisterFromLookup(tmpl, contracts.roots, lookup)
 }
 
-// Models returns a copy of the scanned model contract map.
-func (contracts Contracts) Models() map[string]string {
-	return maps.Clone(contracts.models)
+// Roots returns a copy of the scanned typed-root contract map.
+func (contracts Contracts) Roots() map[string]string {
+	return maps.Clone(contracts.roots)
 }
 
-// RegisterFromLookup registers model accessors using a custom type lookup.
+// RegisterFromLookup registers typed-root accessors using a custom type lookup.
 //
-// The lookup receives each normalized @model type and should return the matching
+// The lookup receives each normalized typed-root type and should return the matching
 // value. Return nil when the type cannot be resolved.
-func RegisterFromLookup(tmpl *template.Template, contracts map[string]string, lookup ModelLookupFunc) error {
-	models, err := bindingsFromLookup(contracts, lookup)
+func RegisterFromLookup(tmpl *template.Template, contracts map[string]string, lookup RootLookupFunc) error {
+	roots, err := bindingsFromLookup(contracts, lookup)
 	if err != nil {
 		return err
 	}
-	return Register(tmpl, models...)
+	return Register(tmpl, roots...)
 }
 
-// NewModelLookup builds a type lookup from concrete Go values.
-func NewModelLookup(values ...any) (ModelLookupFunc, error) {
-	models := make([]modelValue, 0, len(values))
+// NewRootLookup builds a type lookup from concrete Go values.
+func NewRootLookup(values ...any) (RootLookupFunc, error) {
+	roots := make([]rootValue, 0, len(values))
 	for _, value := range values {
-		model, ok := newModelValue(value)
+		root, ok := newRootValue(value)
 		if !ok {
-			return nil, fmt.Errorf("register models: nil model value")
+			return nil, fmt.Errorf("register typed roots: nil root value")
 		}
-		models = append(models, model)
+		roots = append(roots, root)
 	}
 
 	return func(declaredType string) any {
-		matches := matchingValues(normalizeType(declaredType), models)
+		matches := matchingValues(normalizeType(declaredType), roots)
 		if len(matches) != 1 {
 			return nil
 		}
@@ -267,44 +270,44 @@ func NewModelLookup(values ...any) (ModelLookupFunc, error) {
 	}, nil
 }
 
-func bindingsFromLookup(contracts map[string]string, lookup ModelLookupFunc) ([]Binding, error) {
+func bindingsFromLookup(contracts map[string]string, lookup RootLookupFunc) ([]Binding, error) {
 	if lookup == nil {
-		return nil, fmt.Errorf("register models: nil model lookup")
+		return nil, fmt.Errorf("register typed roots: nil root lookup")
 	}
-	models := make([]Binding, 0, len(contracts))
+	roots := make([]Binding, 0, len(contracts))
 	for name, declaredType := range contracts {
-		if !validModelName(name) {
-			return nil, fmt.Errorf("register models: invalid model name %q", name)
+		if !validRootName(name) {
+			return nil, fmt.Errorf("register typed roots: invalid root name %q", name)
 		}
 		normalizedType := normalizeType(declaredType)
 		value := lookup(normalizedType)
 		if value == nil {
-			return nil, fmt.Errorf("register models: @model %s %s has no matching value", name, declaredType)
+			return nil, fmt.Errorf("register typed roots: %s %s has no matching value", name, declaredType)
 		}
-		models = append(models, Model(name, value))
+		roots = append(roots, Root(name, value))
 	}
-	return models, nil
+	return roots, nil
 }
 
-type modelValue struct {
+type rootValue struct {
 	fullName  string
 	shortName string
 	value     any
 }
 
-func newModelValue(value any) (modelValue, bool) {
+func newRootValue(value any) (rootValue, bool) {
 	typeName, ok := valueTypeName(value)
 	if !ok {
-		return modelValue{}, false
+		return rootValue{}, false
 	}
-	return modelValue{
+	return rootValue{
 		fullName:  typeName,
 		shortName: shortTypeName(typeName),
 		value:     value,
 	}, true
 }
 
-func matchingValues(declaredType string, values []modelValue) []any {
+func matchingValues(declaredType string, values []rootValue) []any {
 	matches := make([]any, 0, 1)
 	for _, value := range values {
 		if value.fullName == declaredType {
@@ -326,32 +329,36 @@ func matchingValues(declaredType string, values []modelValue) []any {
 	return matches
 }
 
-// LoadContracts reads template files and returns reusable @model contracts.
+// LoadContracts reads template files and returns reusable typed-root contracts.
 //
 // Applications can call LoadContracts once at startup and reuse the returned
 // value on each render. Changes to template declarations are picked up only
 // after calling LoadContracts again.
 func LoadContracts(files ...string) (Contracts, error) {
-	models, err := ScanContracts(files...)
+	roots, err := ScanContracts(files...)
 	if err != nil {
 		return Contracts{}, err
 	}
-	return Contracts{models: models}, nil
+	return Contracts{roots: roots}, nil
 }
 
-// ScanContracts reads template files and returns the declared @model contracts.
+// ScanContracts reads template files and returns the declared typed-root contracts.
 func ScanContracts(files ...string) (map[string]string, error) {
 	contracts := make(map[string]string)
 	for _, file := range files {
 		data, err := os.ReadFile(file)
 		if err != nil {
-			return nil, fmt.Errorf("register models: read %s: %w", file, err)
+			return nil, fmt.Errorf("register typed roots: read %s: %w", file, err)
 		}
-		for _, match := range modelPattern.FindAllStringSubmatch(contractScanText(string(data)), -1) {
-			name := strings.TrimSpace(match[1])
-			typeName := normalizeType(match[2])
+		for _, match := range typedRootPattern.FindAllStringSubmatch(contractScanText(string(data)), -1) {
+			annotation := strings.TrimSpace(match[1])
+			if reservedContractAnnotation(annotation) {
+				continue
+			}
+			name := strings.TrimSpace(match[2])
+			typeName := normalizeType(match[3])
 			if previous, exists := contracts[name]; exists && previous != typeName {
-				return nil, fmt.Errorf("register models: @model %s is declared as both %s and %s", name, previous, typeName)
+				return nil, fmt.Errorf("register typed roots: %s is declared as both %s and %s", name, previous, typeName)
 			}
 			contracts[name] = typeName
 		}
@@ -410,11 +417,11 @@ func shortTypeName(typ string) string {
 	return typ[lastDot+1:]
 }
 
-func validModelName(name string) bool {
+func validRootName(name string) bool {
 	if name == "" {
 		return false
 	}
-	if reservedTemplateNames[name] {
+	if godoccli.ReservedTemplateNames[name] {
 		return false
 	}
 	for i, r := range name {
@@ -431,37 +438,16 @@ func validModelName(name string) bool {
 	return true
 }
 
-var reservedTemplateNames = map[string]bool{
-	"and":      true,
-	"block":    true,
-	"call":     true,
-	"define":   true,
-	"else":     true,
-	"end":      true,
-	"eq":       true,
-	"ge":       true,
-	"gt":       true,
-	"html":     true,
-	"if":       true,
-	"index":    true,
-	"js":       true,
-	"le":       true,
-	"len":      true,
-	"lt":       true,
-	"ne":       true,
-	"not":      true,
-	"or":       true,
-	"print":    true,
-	"printf":   true,
-	"println":  true,
-	"range":    true,
-	"slice":    true,
-	"template": true,
-	"urlquery": true,
-	"with":     true,
-}
-
 var (
-	modelPattern           = regexp.MustCompile(`(?m)^\s*@model\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
+	typedRootPattern       = regexp.MustCompile(`(?m)^\s*@([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
 	templateCommentPattern = regexp.MustCompile(`(?s)\{\{/\*(.*?)\*/\}\}`)
 )
+
+func reservedContractAnnotation(name string) bool {
+	switch name {
+	case "dot", "func", "gen":
+		return true
+	default:
+		return false
+	}
+}

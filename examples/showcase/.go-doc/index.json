@@ -3,7 +3,7 @@
   "module": "github.com/donseba/go-doc/examples/showcase",
   "templates": {
     "templates/contracts.gohtml": {
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       },
       "funcs": {
@@ -13,7 +13,7 @@
     },
     "templates/contracts.gohtml#content": {
       "name": "content",
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       },
       "funcs": {
@@ -25,13 +25,13 @@
       "column": 1
     },
     "templates/generated_helpers.gohtml": {
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       }
     },
     "templates/generated_helpers.gohtml#content": {
       "name": "content",
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       },
       "source": "templates/generated_helpers.gohtml",
@@ -39,7 +39,7 @@
       "column": 1
     },
     "templates/home.gohtml": {
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       },
       "funcs": {
@@ -49,7 +49,7 @@
     },
     "templates/home.gohtml#content": {
       "name": "content",
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       },
       "funcs": {
@@ -61,7 +61,7 @@
       "column": 1
     },
     "templates/layout.gohtml": {
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       },
       "funcs": {
@@ -70,7 +70,7 @@
       }
     },
     "templates/table.gohtml": {
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       },
       "funcs": {
@@ -80,7 +80,7 @@
     },
     "templates/table.gohtml#content": {
       "name": "content",
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/showcase.ShowcasePage"
       },
       "funcs": {
@@ -92,24 +92,20 @@
       "column": 1
     },
     "templates/user_card.gohtml": {
-      "models": {},
       "dot": "github.com/donseba/go-doc/examples/showcase.User"
     },
     "templates/user_card.gohtml#user_card.gohtml": {
       "name": "user_card.gohtml",
-      "models": {},
       "dot": "github.com/donseba/go-doc/examples/showcase.User",
       "source": "templates/user_card.gohtml",
       "line": 1,
       "column": 1
     },
     "templates/user_row.gohtml": {
-      "models": {},
       "dot": "github.com/donseba/go-doc/examples/showcase.User"
     },
     "templates/user_row.gohtml#user_row.gohtml": {
       "name": "user_row.gohtml",
-      "models": {},
       "dot": "github.com/donseba/go-doc/examples/showcase.User",
       "source": "templates/user_row.gohtml",
       "line": 1,

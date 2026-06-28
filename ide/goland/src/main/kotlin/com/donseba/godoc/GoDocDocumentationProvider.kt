@@ -24,6 +24,17 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
         }
 
         val hoverOffsets = hoverOffsets(source, file.text)
+        hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.typedRootReferenceAt(file.text, offset, index)
+        }?.let { reference ->
+            val type = index.types[reference.typeName] ?: return null
+            val doc = type.doc.ifBlank { "No type documentation found in the Go source." }
+            return """
+                <div class="definition"><b>${escape(type.name)}</b> <code>${escape(type.fqName)}</code></div>
+                <div class="content">${escape(doc).replace("\n", "<br/>")}</div>
+            """.trimIndent()
+        }
+
         val contract = hoverOffsets
             .firstNotNullOfOrNull { offset -> index.contractForFileAt(project, virtualFile.path, offset) }
             ?: return null
@@ -44,7 +55,7 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
             GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract)
         } ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
-        if (contract.models[reference.memberName] == reference.ownerTypeName) {
+        if (contract.isTypedRoot(reference.memberName, reference.ownerTypeName)) {
             val doc = owner.doc.ifBlank { "No type documentation found in the Go source." }
             return """
                 <div class="definition"><b>${escape(owner.name)}</b> <code>${escape(owner.fqName)}</code></div>
@@ -88,6 +99,13 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
         }
 
         val hoverOffsets = hoverOffsets(source, file.text)
+        hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.typedRootReferenceAt(file.text, offset, index)
+        }?.let { reference ->
+            val type = index.types[reference.typeName] ?: return null
+            return "${type.name} ${type.fqName}".trim()
+        }
+
         val contract = hoverOffsets
             .firstNotNullOfOrNull { offset -> index.contractForFileAt(project, virtualFile.path, offset) }
             ?: return null
@@ -102,7 +120,7 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
             GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract)
         } ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
-        if (contract.models[reference.memberName] == reference.ownerTypeName) {
+        if (contract.isTypedRoot(reference.memberName, reference.ownerTypeName)) {
             return "${owner.name} ${owner.fqName}".trim()
         }
         owner.fields[reference.memberName]?.let { field ->

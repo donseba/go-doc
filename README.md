@@ -4,10 +4,10 @@
 
 `go-doc` brings typed editor tooling to Go templates.
 
-It reads lightweight `@model`, `@dot`, and `@func` annotations in `.gohtml`,
-`.tmpl`, and `.html` templates, scans exported Go structs and functions in your
-module, and serves that knowledge to editors through a small Language Server
-Protocol server.
+It reads lightweight typed-root annotations, `@dot`, `@func`, `@gen`, and project-defined
+annotations in `.gohtml`, `.tmpl`, and `.html` templates, scans exported Go
+structs and functions in your module, and serves that knowledge to editors
+through a small Language Server Protocol server.
 
 ```gotemplate
 {{/*
@@ -46,19 +46,19 @@ contract that editors and tools can understand.
 
 ## Features
 
-- Typeahead for declared template models, built-in and custom template
-  functions, exported fields, and exported methods.
+- Typeahead for typed roots, built-in
+  and custom template functions, exported fields, and exported methods.
 - Dot-context completion inside `range` and `with` blocks.
-- Diagnostics for unknown model names, fields, invalid `range` sources, and bad
+- Diagnostics for unknown typed roots, fields, invalid `range` sources, and bad
   function calls.
 - Include checks for `template`, `block`, same-file `define`, and cross-file
   child templates that declare `@dot`.
 - Quick fixes for creating missing model structs and adding missing struct
   fields from template diagnostics.
-- Hover and go-to-definition for model types, fields, methods, functions, and
+- Hover and go-to-definition for typed root types, fields, methods, functions, and
   template includes.
-- Semantic highlighting for model types, model names, built-in functions,
-  custom functions, fields, and methods.
+- Semantic highlighting for typed root types, typed root names,
+  built-in functions, custom functions, fields, and methods.
 - A shared LSP core used by GoLand, VS Code, Sublime Text, Vim, and Neovim.
 - Optional `.go-doc/index.json` generation for CI, debugging, and tool
   interoperability.
@@ -157,6 +157,73 @@ Use `@func` for custom helpers that are local to one template:
 For helpers available everywhere, prefer `.go-doc/config.json` so you do not
 repeat the same `@func` declarations across templates.
 
+Any non-special annotation with a name and type becomes a typed root: a named
+value that go-doc can complete, validate, hover, and navigate. `@model` is the
+recommended convention for page or fragment data. `@symbol`, `@component`,
+`@interaction`, or your own project vocabulary work the same way when they
+declare a type:
+
+```gotemplate
+{{/*
+@symbol LikesPoll github.com/example/app.Interaction
+*/}}
+
+{{ LikesPoll.ID }}
+```
+
+Every typed root is still a two-way contract. The annotation tells go-doc the
+expected type, but your runtime must still register the actual template accessor
+or function that makes `LikesPoll` available. The annotation word is vocabulary,
+not a different engine path.
+
+Any custom annotation with an explicit type is accepted by default:
+
+```gotemplate
+{{/*
+@component Button github.com/example/ui.Button
+@interaction LikesPoll github.com/donseba/go-partial.Interaction
+*/}}
+```
+
+Projects can define shorter symbol annotations in `.go-doc/config.json`. This
+lets framework packages expose their own vocabulary without hard-coding it into
+go-doc, and it lets stricter teams decide which annotation names are allowed:
+
+```json
+{
+  "symbolAnnotations": [
+    {
+      "name": "interaction",
+      "type": "github.com/donseba/go-partial.Interaction"
+    },
+    {
+      "name": "component"
+    }
+  ]
+}
+```
+
+With that configuration, templates can write:
+
+```gotemplate
+{{/*
+@interaction LikesPoll
+@component Button github.com/example/ui.Button
+*/}}
+```
+
+`@interaction LikesPoll` gets the configured default type. `@component Button`
+requires an explicit type because its config entry has no default type. These
+aliases behave like normal typed roots after parsing. `@func` remains the right
+annotation for callable helpers, because it carries function signatures, arity
+checks, argument checks, pipelines, and return types.
+
+By default, custom annotation names are open. `@jimmy Button
+github.com/example/ui.Button` is valid because it includes an explicit type. Set
+`symbolStrictMode: true` when you want go-doc to warn about unconfigured custom
+annotation names. In strict mode, only entries listed in `symbolAnnotations`
+are accepted as custom typed-root annotations.
+
 ## Configuration
 
 No `.go-doc` folder is required. By default, `go-doc` finds the nearest
@@ -171,6 +238,8 @@ The default configuration is:
   "include": ["/"],
   "exclude": ["vendor"],
   "functions": {},
+  "symbolAnnotations": [],
+  "symbolStrictMode": false,
   "writeIndex": false
 }
 ```
@@ -186,7 +255,13 @@ Add `.go-doc/config.json` only when a project needs to change those defaults:
   "functions": {
     "asset": "github.com/example/app.Asset",
     "formatDate": "github.com/example/app.FormatDate"
-  }
+  },
+  "symbolAnnotations": [
+    {
+      "name": "component"
+    }
+  ],
+  "symbolStrictMode": false
 }
 ```
 
@@ -195,6 +270,12 @@ includes. `enabled: false` disables go-doc for the project while leaving the
 editor plugin installed. `functions` describes helpers that are available in every template so
 the language server can complete and validate them without repeating `@func` in
 each file.
+`symbolAnnotations` describes custom annotation names that produce typed roots.
+Use this for framework concepts such as `@interaction`, `@component`,
+or any project-specific template value that should be completed and navigated
+like a named root value but is not a callable function. `symbolStrictMode` defaults to
+`false`; when set to `true`, unconfigured custom annotation names are reported as
+typos even if they include an explicit type.
 
 `writeIndex` controls editor auto-indexing. Keep it `false` unless you want editor
 adapters to maintain `.go-doc/index.json` after file changes. Even when it is
@@ -277,7 +358,7 @@ Register the generated helpers before parsing:
 tmpl := template.New("page.gohtml").Funcs(gen.FuncMap())
 ```
 
-That FuncMap only provides helper namespaces. Named models such as `Page` still
+That FuncMap only provides helper namespaces. Named typed roots such as `Page` still
 need the renderer or equivalent application glue described below.
 
 See [README_gen.md](./README_gen.md) and [examples/exp-gen](./examples/exp-gen)
@@ -288,10 +369,10 @@ for the full explanation.
 `go-doc` does not require a framework. It does not execute your templates or
 change how your application renders HTML.
 
-For projects that want the annotated model names available during ordinary
+For projects that want annotated typed-root names available during ordinary
 `html/template` parsing, the repository includes a small `renderer` package. It
 can scan the same template declarations, match them to the Go values you pass,
-and register the declared model accessors before parsing:
+and register the declared typed-root accessors before parsing:
 
 Think of `@model` as a tunnel. The template declares the entrance:
 
@@ -344,6 +425,10 @@ The standalone example in `examples/standalone` shows this without depending on
 
 The todo example in `examples/todo` shows a small multi-template setup with a
 main shell, todo list, and todo detail template.
+
+The symbols example in `examples/symbols` shows configured symbol annotations
+such as `@interaction` and `@component`, plus the runtime `FuncMap` that makes
+those names available to `html/template`.
 
 ## Local Development
 

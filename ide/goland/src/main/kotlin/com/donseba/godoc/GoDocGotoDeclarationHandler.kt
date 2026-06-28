@@ -25,6 +25,11 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
             return targetElement(project, index, reference.targetPath, reference.targetLine, reference.targetColumn)
         }
 
+        GoDocTemplateContext.typedRootReferenceAt(file.text, offset, index)?.let { reference ->
+            val type = index.types[reference.typeName] ?: return null
+            return targetElement(project, index, type.file, type.line, type.column)
+        }
+
         val contract = index.contractForFileAt(project, virtualFile.path, offset) ?: return null
         GoDocTemplateContext.templateFunctionAt(file.text, offset, index, contract)?.let { reference ->
             val fn = index.funcs[reference.funcName] ?: return null
@@ -33,7 +38,7 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
 
         val reference = GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract) ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
-        if (contract.models[reference.memberName] == reference.ownerTypeName) {
+        if (contract.isTypedRoot(reference.memberName, reference.ownerTypeName)) {
             return targetElement(project, index, owner.file, owner.line, owner.column)
         }
         val field = owner.fields[reference.memberName]
