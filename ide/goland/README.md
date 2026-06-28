@@ -62,14 +62,14 @@ Disable go-doc for one project with `.go-doc/config.json`:
 
 ## Editor Features
 
-- completions for `@model` types, model names, fields, methods, functions, and
+- completions for typed-root types, typed root names, fields, methods, functions, and
   range/with dot contexts
-- diagnostics for unknown model names, unknown fields, unknown model types,
+- diagnostics for unknown typed roots, unknown fields, unknown typed root types,
   invalid `range` sources, bad function calls, and wrong template include data
-- hover and go-to-definition for model types, fields, methods, functions, and
+- hover and go-to-definition for typed root types, fields, methods, functions, and
   child templates
-- document symbols for declared models
-- semantic highlighting for model types, model names, functions, fields, and
+- document symbols for declared typed roots
+- semantic highlighting for typed root types, typed root names, functions, fields, and
   methods
 
 ## Actions

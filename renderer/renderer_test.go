@@ -15,7 +15,7 @@ type testPage struct {
 
 func TestRegisterAddsModelAccessorsToTemplate(t *testing.T) {
 	tmpl := template.New("page")
-	if err := Register(tmpl, Model("page", testPage{Title: "Hello"})); err != nil {
+	if err := Register(tmpl, Root("page", testPage{Title: "Hello"})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tmpl.Parse(`{{ page.Title }}`); err != nil {
@@ -31,35 +31,35 @@ func TestRegisterAddsModelAccessorsToTemplate(t *testing.T) {
 	}
 }
 
-func TestRegisterRejectsInvalidModel(t *testing.T) {
-	err := Register(template.New("page"), Model("", testPage{}))
-	if err == nil || !strings.Contains(err.Error(), "invalid model name") {
-		t.Fatalf("err = %v, want invalid model name", err)
+func TestRegisterRejectsInvalidRoot(t *testing.T) {
+	err := Register(template.New("page"), Root("", testPage{}))
+	if err == nil || !strings.Contains(err.Error(), "invalid root name") {
+		t.Fatalf("err = %v, want invalid root name", err)
 	}
 }
 
-func TestRegisterRejectsDuplicateModel(t *testing.T) {
-	err := Register(template.New("page"), Model("page", testPage{}), Model("page", testPage{}))
-	if err == nil || !strings.Contains(err.Error(), "duplicate model name") {
-		t.Fatalf("err = %v, want duplicate model name", err)
+func TestRegisterRejectsDuplicateRoot(t *testing.T) {
+	err := Register(template.New("page"), Root("page", testPage{}), Root("page", testPage{}))
+	if err == nil || !strings.Contains(err.Error(), "duplicate root name") {
+		t.Fatalf("err = %v, want duplicate root name", err)
 	}
 }
 
-func TestRegisterRejectsModelNamesThatCannotBeTemplateFunctions(t *testing.T) {
-	err := Register(template.New("page"), Model("todo-item", testPage{}))
-	if err == nil || !strings.Contains(err.Error(), "invalid model name") {
-		t.Fatalf("err = %v, want invalid model name", err)
+func TestRegisterRejectsRootNamesThatCannotBeTemplateFunctions(t *testing.T) {
+	err := Register(template.New("page"), Root("todo-item", testPage{}))
+	if err == nil || !strings.Contains(err.Error(), "invalid root name") {
+		t.Fatalf("err = %v, want invalid root name", err)
 	}
 }
 
 func TestRegisterRejectsNilTemplate(t *testing.T) {
-	err := Register(nil, Model("page", testPage{}))
+	err := Register(nil, Root("page", testPage{}))
 	if err == nil || !strings.Contains(err.Error(), "nil template") {
 		t.Fatalf("err = %v, want nil template", err)
 	}
 }
 
-func TestRegisterFromFilesUsesModelDeclarationNames(t *testing.T) {
+func TestRegisterFromFilesUsesRootDeclarationNames(t *testing.T) {
 	root := t.TempDir()
 	file := writeTemplate(t, root, "page.gohtml", `{{/*
 @model Page github.com/donseba/go-doc/renderer.testPage
@@ -283,7 +283,7 @@ func TestLoadContractsCanBeReusedAtStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := contracts.Models()["Page"]; got != "github.com/donseba/go-doc/renderer.testPage" {
+	if got := contracts.Roots()["Page"]; got != "github.com/donseba/go-doc/renderer.testPage" {
 		t.Fatalf("contract Page = %q", got)
 	}
 
@@ -362,7 +362,7 @@ func TestRegisterFromFilesSeesTemplateDeclarationChanges(t *testing.T) {
 	}
 }
 
-func TestRegisterFromFilesUsesRenamedModelDeclaration(t *testing.T) {
+func TestRegisterFromFilesUsesRenamedRootDeclaration(t *testing.T) {
 	root := t.TempDir()
 	file := writeTemplate(t, root, "page.gohtml", `{{/*
 @model XXX github.com/donseba/go-doc/renderer.testPage
@@ -432,7 +432,7 @@ func TestRegisterFromFilesScansOneLineTemplateComment(t *testing.T) {
 	}
 }
 
-func TestRegisterFromFilesRejectsMissingModelValue(t *testing.T) {
+func TestRegisterFromFilesRejectsMissingRootValue(t *testing.T) {
 	root := t.TempDir()
 	file := writeTemplate(t, root, "page.gohtml", `{{/*
 @model Page github.com/donseba/go-doc/renderer.testPage
@@ -444,7 +444,7 @@ func TestRegisterFromFilesRejectsMissingModelValue(t *testing.T) {
 	}
 }
 
-func TestRegisterFromFilesRejectsAmbiguousModelValue(t *testing.T) {
+func TestRegisterFromFilesRejectsAmbiguousRootValue(t *testing.T) {
 	root := t.TempDir()
 	file := writeTemplate(t, root, "page.gohtml", `{{/*
 @model Page github.com/donseba/go-doc/renderer.testPage
@@ -461,7 +461,7 @@ func TestRegisterFromLookupUsesCustomResolver(t *testing.T) {
 	contracts := map[string]string{
 		"Page": "github.com/example/app.Page",
 	}
-	lookup := ModelLookupFunc(func(typeName string) any {
+	lookup := RootLookupFunc(func(typeName string) any {
 		if typeName == "github.com/example/app.Page" {
 			return testPage{Title: "from lookup"}
 		}
@@ -498,22 +498,22 @@ func TestRegisterFromLookupRejectsMissingValue(t *testing.T) {
 
 func TestRegisterFromLookupRejectsNilLookup(t *testing.T) {
 	err := RegisterFromLookup(template.New("page.gohtml"), map[string]string{"Page": "github.com/example/app.Page"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "nil model lookup") {
+	if err == nil || !strings.Contains(err.Error(), "nil root lookup") {
 		t.Fatalf("err = %v, want nil lookup error", err)
 	}
 }
 
-func TestRegisterFromLookupRejectsReservedModelName(t *testing.T) {
+func TestRegisterFromLookupRejectsReservedRootName(t *testing.T) {
 	err := RegisterFromLookup(template.New("page.gohtml"), map[string]string{"len": "github.com/example/app.Page"}, func(string) any {
 		return testPage{}
 	})
-	if err == nil || !strings.Contains(err.Error(), "invalid model name") {
-		t.Fatalf("err = %v, want invalid model name error", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid root name") {
+		t.Fatalf("err = %v, want invalid root name error", err)
 	}
 }
 
 func TestMatchingValuesAcceptsMainPackageRuntimeType(t *testing.T) {
-	values := []modelValue{
+	values := []rootValue{
 		{fullName: "main.Page", shortName: "Page", value: testPage{Title: "from main"}},
 	}
 
@@ -527,7 +527,7 @@ func TestMatchingValuesAcceptsMainPackageRuntimeType(t *testing.T) {
 }
 
 func TestMatchingValuesDoesNotShortMatchNonMainPackages(t *testing.T) {
-	values := []modelValue{
+	values := []rootValue{
 		{fullName: "github.com/other/app.Page", shortName: "Page", value: testPage{Title: "wrong"}},
 	}
 
@@ -538,7 +538,7 @@ func TestMatchingValuesDoesNotShortMatchNonMainPackages(t *testing.T) {
 }
 
 func TestMatchingValuesDetectsAmbiguousMainPackageRuntimeTypes(t *testing.T) {
-	values := []modelValue{
+	values := []rootValue{
 		{fullName: "main.Page", shortName: "Page", value: testPage{Title: "one"}},
 		{fullName: "main.Page", shortName: "Page", value: testPage{Title: "two"}},
 	}

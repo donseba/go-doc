@@ -3,7 +3,7 @@
   "module": "github.com/donseba/go-doc/examples/todo",
   "templates": {
     "templates/main.gohtml": {
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/todo.TodoPage"
       },
       "funcs": {
@@ -14,7 +14,7 @@
       }
     },
     "templates/todo_detail.gohtml": {
-      "models": {
+      "roots": {
         "Todo": "github.com/donseba/go-doc/examples/todo.Todo"
       },
       "funcs": {
@@ -25,7 +25,7 @@
       }
     },
     "templates/todo_list.gohtml": {
-      "models": {
+      "roots": {
         "Page": "github.com/donseba/go-doc/examples/todo.TodoPage",
         "User": "github.com/donseba/go-doc/examples/todo.User"
       },

@@ -298,16 +298,10 @@ object GoDocTemplateContext {
                 val annotation = match.groupValues[1]
                 val nameRange = match.groups[2]?.range ?: return@flatMap emptyList()
                 val explicitTypeRange = match.groups[3]?.range
-                val typeName = when (annotation) {
-                    "model", "symbol" -> match.groupValues.getOrNull(3).orEmpty()
-                    else -> {
-                        if (isReservedContractAnnotation(annotation)) return@flatMap emptyList()
-                        val explicit = match.groupValues.getOrNull(3).orEmpty()
-                        val aliasType = index.symbolAliases[annotation]
-                        if (aliasType == null && index.symbolStrictMode) ""
-                        else explicit.ifBlank { aliasType.orEmpty() }
-                    }
-                }
+                if (isReservedContractAnnotation(annotation)) return@flatMap emptyList()
+                val explicit = match.groupValues.getOrNull(3).orEmpty()
+                val aliasType = index.symbolAliases[annotation]
+                val typeName = if (aliasType == null && index.symbolStrictMode) "" else explicit.ifBlank { aliasType.orEmpty() }
                 if (typeName.isBlank()) return@flatMap emptyList()
                 val resolved = index.resolveGoType(typeName) ?: typeName.takeIf { index.types.containsKey(it) } ?: return@flatMap emptyList()
                 val refs = mutableListOf<GoDocTypedRootReference>()
@@ -345,6 +339,16 @@ object GoDocTemplateContext {
 
     fun funcReferencesInRange(text: String, startOffset: Int, endOffset: Int, index: GoDocIndex): List<GoDocFuncReference> {
         val refs = mutableListOf<GoDocFuncReference>()
+        refs.addAll(funcDeclarationPattern.findAll(text, startOffset)
+            .takeWhile { (it.groups[1]?.range?.first ?: Int.MAX_VALUE) < endOffset }
+            .mapNotNull { match ->
+                val nameRange = match.groups[1]?.range ?: return@mapNotNull null
+                if (nameRange.last + 1 <= startOffset || nameRange.first >= endOffset) return@mapNotNull null
+                val raw = match.groupValues[2]
+                val normalized = normalizeType(raw)
+                if (!index.funcs.containsKey(normalized)) return@mapNotNull null
+                GoDocFuncReference(normalized, nameRange.first, nameRange.last + 1)
+            })
         refs.addAll(funcTypePattern.findAll(text, startOffset)
             .takeWhile { (it.groups[1]?.range?.first ?: Int.MAX_VALUE) < endOffset }
             .mapNotNull { match ->
@@ -390,9 +394,7 @@ object GoDocTemplateContext {
     private fun contractForText(text: String, index: GoDocIndex): TemplateContract? {
         val contractText = contractScanText(text)
         val typedRoots = parseTypedRoots(contractText, index)
-        val models = typedRoots
-            .filter { it.annotation == "model" }
-            .associate { it.name to (index.resolveGoType(it.typeName) ?: it.typeName) }
+        val roots = typedRoots.associate { it.name to (index.resolveGoType(it.typeName) ?: it.typeName) }
         val dot = dotContractPattern.find(contractText)?.let { match ->
             val rawType = normalizeType(match.groupValues[1])
             index.resolveGoType(rawType) ?: rawType
@@ -403,15 +405,12 @@ object GoDocTemplateContext {
         val gens = genContractPattern.findAll(contractText).associate { match ->
             match.groupValues[1] to match.groupValues[2]
         }
-        val symbols = typedRoots
-            .filter { it.annotation != "model" }
-            .associate { it.name to (index.resolveGoType(it.typeName) ?: it.typeName) }
-        if (models.isEmpty() && dot.isEmpty() && funcs.isEmpty() && gens.isEmpty() && symbols.isEmpty()) return null
+        if (roots.isEmpty() && dot.isEmpty() && funcs.isEmpty() && gens.isEmpty()) return null
         val generatedModels = gens.keys.mapNotNull { name ->
             val typeName = "$GEN_TYPE_PREFIX$name"
             if (index.types.containsKey(typeName)) name to typeName else null
         }.toMap()
-        return TemplateContract(models = models + generatedModels, dot = dot, funcs = funcs, gens = gens, symbols = symbols)
+        return TemplateContract(roots = roots + generatedModels, dot = dot, funcs = funcs, gens = gens)
     }
 
     private fun parseTypedRoots(text: String, index: GoDocIndex): List<TypedRoot> {
@@ -419,18 +418,11 @@ object GoDocTemplateContext {
             val annotation = match.groupValues[1]
             val name = match.groupValues[2]
             var typeName = match.groupValues.getOrNull(3).orEmpty()
-            when (annotation) {
-                "model", "symbol" -> {
-                    if (typeName.isBlank()) return@mapNotNull null
-                }
-                else -> {
-                    if (isReservedContractAnnotation(annotation)) return@mapNotNull null
-                    val aliasType = index.symbolAliases[annotation]
-                    if (aliasType == null && index.symbolStrictMode) return@mapNotNull null
-                    if (typeName.isBlank() && aliasType != null) typeName = aliasType
-                    if (typeName.isBlank()) return@mapNotNull null
-                }
-            }
+            if (isReservedContractAnnotation(annotation)) return@mapNotNull null
+            val aliasType = index.symbolAliases[annotation]
+            if (aliasType == null && index.symbolStrictMode) return@mapNotNull null
+            if (typeName.isBlank() && aliasType != null) typeName = aliasType
+            if (typeName.isBlank()) return@mapNotNull null
             TypedRoot(annotation = annotation, name = name, typeName = normalizeType(typeName))
         }.toList()
     }
@@ -620,7 +612,7 @@ object GoDocTemplateContext {
 
     private fun modelNamesNear(text: String, offset: Int): Set<String> {
         val before = text.substring(0, offset.coerceIn(0, text.length))
-        return modelDeclarationPattern.findAll(before).map { it.groupValues[1] }.toSet()
+        return typedRootDeclarationPattern.findAll(before).map { it.groupValues[2] }.toSet()
     }
 
     private val actionPattern = Regex("""\{\{\s*(?:-)?\s*(range|with|end)\b([^}]*)\}\}""")
@@ -630,11 +622,12 @@ object GoDocTemplateContext {
     private val funcContractPattern = Regex("""(?m)^\s*@func\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
     private val genContractPattern = Regex("""(?m)^\s*@gen\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
     private val annotationContractPattern = Regex("""(?m)^\s*@([A-Za-z_][A-Za-z0-9_]*)\s+([\u0024A-Za-z_][A-Za-z0-9_]*)(?:\s+([A-Za-z0-9_./\[\]*\-]+))?""")
-    private val modelTypePattern = Regex("""@model\s+[\u0024A-Za-z][A-Za-z0-9_]*\s+([A-Za-z0-9_./\-]+)""")
+    private val typedRootTypePattern = Regex("""@[A-Za-z_][A-Za-z0-9_]*\s+[\u0024A-Za-z][A-Za-z0-9_]*\s+([A-Za-z0-9_./\-]+)""")
     private val dotTypePattern = Regex("""@dot\s+([A-Za-z0-9_./\-]+)""")
-    private val typePatterns = listOf(modelTypePattern, dotTypePattern)
+    private val typePatterns = listOf(typedRootTypePattern, dotTypePattern)
     private val funcTypePattern = Regex("""@func\s+[\u0024A-Za-z][A-Za-z0-9_]*\s+([A-Za-z0-9_./\-]+)""")
-    private val modelDeclarationPattern = Regex("""@model\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+[A-Za-z0-9_./\-]+""")
+    private val funcDeclarationPattern = Regex("""@func\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z0-9_./\-]+)""")
+    private val typedRootDeclarationPattern = Regex("""@([A-Za-z_][A-Za-z0-9_]*)\s+([\u0024A-Za-z][A-Za-z0-9_]*)\s+[A-Za-z0-9_./\-]+""")
     private val templateCommentBodyPattern = Regex("""(?s)\{\{/\*(.*?)\*/\}\}""")
     private val tokenPattern = Regex("""[\u0024_A-Za-z][\u0024_A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9_]*)*|\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*""")
     private const val GEN_TYPE_PREFIX = "\$go-doc/gen."

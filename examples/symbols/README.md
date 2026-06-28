@@ -1,10 +1,11 @@
 # Symbols Example
 
-This example shows the generic symbol contract added to go-doc.
+This example shows open typed-root annotations in go-doc.
 
-Symbols are typed roots for runtime-provided template names. They use the same
-completion, hover, diagnostics, and navigation machinery as `@model`, but they
-are not ordinary page data and are not validated like callable `@func` helpers.
+Any non-special annotation with a name and type becomes a typed root. `@model`
+is the recommended convention for page data, but `@component`, `@interaction`,
+`@struct`, or another project word use the same completion, hover, diagnostics,
+and navigation machinery. Callable helpers still use `@func`.
 
 Custom annotations with explicit types work without config. This example also
 uses project config to declare two known annotations, one with a default type and
@@ -45,7 +46,7 @@ type. With `symbolStrictMode` left false, an experimental annotation such as
 `@jimmy PrimaryButton github.com/example.Button` would also be accepted when it
 declares a type. Set `symbolStrictMode` to true when you want unknown annotation
 names to be reported as typos. After parsing, all accepted custom annotations
-are treated as typed symbol roots.
+are treated as typed roots.
 
 This is still a two-way contract. The annotation only teaches go-doc and the
 editor what `LikesPoll` and `PrimaryButton` mean. Runtime code still has to

@@ -40,7 +40,6 @@ func main() {
 			{Path: "/docs/renderer", Label: "Renderer", Group: "Guide"},
 			{Path: "/docs/cli", Label: "CLI and index", Group: "Reference"},
 			{Path: "/docs/lsp", Label: "LSP behavior", Group: "Reference"},
-			{Path: "/docs/ecosystem", Label: "Ecosystem", Group: "Reference"},
 		},
 	}
 
@@ -54,7 +53,6 @@ func main() {
 	mux.HandleFunc("/docs/renderer", app.page("renderer.gohtml", "Renderer", "A small helper for registering model values without changing template execution.", "Runtime"))
 	mux.HandleFunc("/docs/cli", app.page("cli.gohtml", "CLI and index", "How go-doc scans packages and produces editor metadata.", "Reference"))
 	mux.HandleFunc("/docs/lsp", app.page("lsp.gohtml", "LSP behavior", "What the language server understands today.", "Reference"))
-	mux.HandleFunc("/docs/ecosystem", app.page("ecosystem.gohtml", "Ecosystem", "A place for go-doc, go-partial, go-translator, and the future docs hub.", "Ecosystem"))
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("examples/docs/static"))))
 
 	addr := "localhost:8101"

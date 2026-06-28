@@ -56,16 +56,15 @@ data class GoDocFunc(
 
 data class TemplateContract(
     val name: String = "",
-    val models: Map<String, String>,
+    val roots: Map<String, String>,
     val dot: String = "",
     val funcs: Map<String, String> = emptyMap(),
     val gens: Map<String, String> = emptyMap(),
-    val symbols: Map<String, String> = emptyMap(),
     val source: String = "",
     val line: Int = 0,
     val column: Int = 0,
 ) {
-    fun typedRootType(name: String): String? = models[name] ?: symbols[name]
+    fun typedRootType(name: String): String? = roots[name]
 
     fun isTypedRoot(name: String, typeName: String): Boolean = typedRootType(name) == typeName
 }
@@ -274,8 +273,8 @@ class GoDocIndex(
 
             jsonObject(root, "templates")?.entrySet()?.forEach { (path, element) ->
                 val obj = element.asJsonObjectOrNull() ?: return@forEach
-                val modelsObject = jsonObject(obj, "models")
-                val models = modelsObject?.entrySet()?.associate { (name, value) ->
+                val rootsObject = jsonObject(obj, "roots")
+                val roots = rootsObject?.entrySet()?.associate { (name, value) ->
                     name to value.asString
                 } ?: emptyMap()
                 val funcsObject = jsonObject(obj, "funcs")
@@ -286,17 +285,12 @@ class GoDocIndex(
                 val gens = gensObject?.entrySet()?.associate { (name, value) ->
                     name to value.asString
                 } ?: emptyMap()
-                val symbolsObject = jsonObject(obj, "symbols")
-                val symbols = symbolsObject?.entrySet()?.associate { (name, value) ->
-                    name to value.asString
-                } ?: emptyMap()
                 templates[path] = TemplateContract(
                     name = obj.get("name")?.asString ?: "",
-                    models = models,
+                    roots = roots,
                     dot = obj.get("dot")?.asString ?: "",
                     funcs = templateFuncs,
                     gens = gens,
-                    symbols = symbols,
                     source = obj.get("source")?.asString ?: "",
                     line = obj.get("line")?.asInt ?: 0,
                     column = obj.get("column")?.asInt ?: 0,
@@ -435,11 +429,11 @@ class GoDocIndex(
         val rootType = when {
             root == "_" -> {
                 path = parts.drop(2)
-                parts.getOrNull(1)?.let { contract.models[it] }
+                parts.getOrNull(1)?.let { contract.roots[it] }
             }
             root.startsWith("$") -> {
                 path = parts.drop(1)
-                contract.models[root]
+                contract.roots[root]
             }
             clean.startsWith(".") -> {
                 path = parts
@@ -590,8 +584,6 @@ class GoDocIndex(
         val rawText = templateText(filePath) ?: return base
         val text = contractScanText(contractAnnotationText(rawText, base))
         val typedRoots = parseTypedRoots(text)
-        val modelRoots = typedRoots.filter { it.annotation == "model" }
-        val symbolRoots = typedRoots.filter { it.annotation != "model" }
         val dotMatch = dotPattern.find(text)
         val funcMatches = funcPattern.findAll(text).toList()
         val genMatches = genPattern.findAll(text).toList()
@@ -602,7 +594,7 @@ class GoDocIndex(
             genMatches.isEmpty()
         ) return base
 
-        val models = if (modelRoots.isEmpty()) base?.models.orEmpty().toMutableMap() else modelRoots.associate { root ->
+        val roots = if (typedRoots.isEmpty()) base?.roots.orEmpty().toMutableMap() else typedRoots.associate { root ->
             root.name to (resolveGoType(root.typeName) ?: root.typeName)
         }.toMutableMap()
         val dot = dotMatch?.let { match ->
@@ -618,14 +610,10 @@ class GoDocIndex(
         for ((name, _) in gens) {
             val generatedType = "$GEN_TYPE_PREFIX$name"
             if (types.containsKey(generatedType)) {
-                models[name] = generatedType
+                roots[name] = generatedType
             }
         }
-        val symbols = base?.symbols.orEmpty().toMutableMap()
-        for (root in symbolRoots) {
-            symbols[root.name] = resolveGoType(root.typeName) ?: root.typeName
-        }
-        return TemplateContract(models = models, dot = dot, funcs = funcs, gens = gens, symbols = symbols)
+        return TemplateContract(roots = roots, dot = dot, funcs = funcs, gens = gens)
     }
 
     private fun parseTypedRoots(text: String): List<TypedRoot> {
@@ -633,18 +621,11 @@ class GoDocIndex(
             val annotation = match.groupValues[1]
             val name = match.groupValues[2]
             var typeName = match.groupValues.getOrNull(3).orEmpty()
-            when (annotation) {
-                "model", "symbol" -> {
-                    if (typeName.isBlank()) return@mapNotNull null
-                }
-                else -> {
-                    if (isReservedContractAnnotation(annotation)) return@mapNotNull null
-                    val aliasType = symbolAliases[annotation]
-                    if (aliasType == null && symbolStrictMode) return@mapNotNull null
-                    if (typeName.isBlank() && aliasType != null) typeName = aliasType
-                    if (typeName.isBlank()) return@mapNotNull null
-                }
-            }
+            if (isReservedContractAnnotation(annotation)) return@mapNotNull null
+            val aliasType = symbolAliases[annotation]
+            if (aliasType == null && symbolStrictMode) return@mapNotNull null
+            if (typeName.isBlank() && aliasType != null) typeName = aliasType
+            if (typeName.isBlank()) return@mapNotNull null
             TypedRoot(annotation = annotation, name = name, typeName = typeName)
         }.toList()
     }

@@ -94,8 +94,8 @@ type privateState struct {
 	}
 
 	contract := idx.Templates["templates/todos.gohtml"]
-	if contract.Models["page"] != "example.com/app.Page" {
-		t.Fatalf("@model page = %q", contract.Models["page"])
+	if contract.Roots["page"] != "example.com/app.Page" {
+		t.Fatalf("@model page = %q", contract.Roots["page"])
 	}
 }
 
@@ -156,8 +156,8 @@ func FirstUser() User {
 		t.Fatal("index should be needed for one-line annotations")
 	}
 	page := idx.Templates["templates/page.gohtml"]
-	if page.Models["Page"] != "example.com/app.Page" {
-		t.Fatalf("Page model = %q", page.Models["Page"])
+	if page.Roots["Page"] != "example.com/app.Page" {
+		t.Fatalf("Page model = %q", page.Roots["Page"])
 	}
 	if page.Funcs["firstUser"] != "FirstUser" {
 		t.Fatalf("firstUser func = %q", page.Funcs["firstUser"])
@@ -466,10 +466,10 @@ type Button struct {
 		t.Fatal("index should be needed for configured symbol annotations")
 	}
 	tmpl := idx.Templates["templates/page.gohtml"]
-	if got := tmpl.Symbols["LikesPoll"]; got != "example.com/app.Interaction" {
+	if got := tmpl.Roots["LikesPoll"]; got != "example.com/app.Interaction" {
 		t.Fatalf("@interaction LikesPoll = %q", got)
 	}
-	if got := tmpl.Symbols["Button"]; got != "example.com/app.Button" {
+	if got := tmpl.Roots["Button"]; got != "example.com/app.Button" {
 		t.Fatalf("@component Button = %q", got)
 	}
 	if idx.SymbolAliases["interaction"] != "example.com/app.Interaction" {
@@ -502,7 +502,7 @@ type Button struct {
 		t.Fatal("index should be needed for explicit custom symbol annotations")
 	}
 	tmpl := idx.Templates["templates/page.gohtml"]
-	if got := tmpl.Symbols["Button"]; got != "example.com/app.Button" {
+	if got := tmpl.Roots["Button"]; got != "example.com/app.Button" {
 		t.Fatalf("@jimmy Button = %q", got)
 	}
 	if len(idx.Problems) != 0 {
@@ -533,8 +533,8 @@ type Button struct {
 		t.Fatal("index should not be needed for an unknown strict-mode symbol")
 	}
 	tmpl := idx.Templates["templates/page.gohtml"]
-	if _, ok := tmpl.Symbols["Button"]; ok {
-		t.Fatalf("strict mode should not accept unknown @jimmy symbol: %#v", tmpl.Symbols)
+	if _, ok := tmpl.Roots["Button"]; ok {
+		t.Fatalf("strict mode should not accept unknown @jimmy symbol: %#v", tmpl.Roots)
 	}
 	if !idx.SymbolStrict {
 		t.Fatal("SymbolStrict = false, want true")
@@ -578,9 +578,9 @@ func FormatTime(t time.Time, layout string) string {
 	if tmpl.Gens["view"] != "example.com/app/viewfuncs" {
 		t.Fatalf("@gen view = %q", tmpl.Gens["view"])
 	}
-	genType := tmpl.Models["view"]
+	genType := tmpl.Roots["view"]
 	if genType == "" {
-		t.Fatalf("@gen namespace was not projected into models: %#v", tmpl)
+		t.Fatalf("@gen namespace was not projected into Roots: %#v", tmpl)
 	}
 	viewType := idx.Types[genType]
 	if viewType.File != "viewfuncs/viewfuncs.go" || viewType.Line != 1 || viewType.Column != 1 {

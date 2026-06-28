@@ -158,7 +158,7 @@ The app then wires this into the template just like any other helper map:
 tmpl := template.New("page.gohtml").Funcs(gen.FuncMap())
 ```
 
-This registers only the generated helper namespaces. Named models such as
+This registers only the generated helper namespaces. Named typed roots such as
 `Page` still need the renderer or equivalent application glue to register the
 matching template function before parsing.
 
@@ -254,11 +254,11 @@ one generated FuncMap.
 The language server treats every `@gen name package/path` line as a generated
 namespace contract.
 
-In the index, it projects the namespace into the template model space:
+In the index, it projects the namespace into the typed-root space:
 
 ```json
 {
-  "models": {
+  "roots": {
     "time": "$go-doc/gen.time",
     "money": "$go-doc/gen.money",
     "text": "$go-doc/gen.text"

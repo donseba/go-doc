@@ -16,7 +16,7 @@
 _ = contractRenderer.Register(tmpl, page)
 _, _ = tmpl.ParseFiles("templates/main.gohtml")`}}</code></pre>
 <p>Without that registration, plain <code>html/template</code> cannot resolve <code>Page</code>. For direct <code>tmpl.Execute(w, page)</code>, use <code>@dot</code> and <code>{{`{{ .Title }}`}}</code> instead.</p>
-<p>Model names should not reuse template function names. If <code>mul</code> is a global helper or local <code>@func</code>, <code>@model mul ...</code> is reported as a collision because the runtime cannot safely treat the same identifier as both a value accessor and a function.</p>
+<p>Typed root names should not reuse template function names. If <code>mul</code> is a global helper or local <code>@func</code>, <code>@model mul ...</code> or <code>@component mul ...</code> is reported as a collision because the runtime cannot safely treat the same identifier as both a value accessor and a function.</p>
 
 <h2>Dot access</h2>
 <pre><code>&#123;&#123;/*
@@ -41,15 +41,15 @@ _, _ = tmpl.ParseFiles("templates/main.gohtml")`}}</code></pre>
 
 <p><code>@func</code> lets go-doc understand custom template functions, including argument checks and return types. If a function returns a struct, completion continues through <code>with</code> blocks and parenthesized calls.</p>
 
-<h2>Typed roots and symbols</h2>
-<p><code>@model</code> and <code>@symbol</code> are both typed roots. They complete, hover, navigate, and diagnose through the same engine. Use <code>@model</code> for page or fragment data. Use <code>@symbol</code> for names supplied by a renderer, framework, component system, or other runtime helper layer.</p>
+<h2>Typed roots</h2>
+<p>Any non-special annotation with a name and type is a typed root. Typed roots complete, hover, navigate, and diagnose through the same engine. Use <code>@model</code> as the convention for page or fragment data. Use project vocabulary such as <code>@interaction</code>, <code>@component</code>, or <code>@struct</code> for names supplied by a renderer, framework, component system, or other runtime helper layer.</p>
 <pre><code>&#123;&#123;/*
 &#64;symbol LikesPoll github.com/example/app.Interaction
 */&#125;&#125;
 
 &#123;&#123; LikesPoll.ID &#125;&#125;</code></pre>
 
-<p><code>@symbol</code> declares a typed runtime-provided name. It is useful for framework concepts that behave like values in the template but are not ordinary page models. The editor can complete fields and navigate to the declared type, but runtime code still has to register the real value or function.</p>
+<p>A custom annotation declares a typed runtime-provided name. It is useful for framework concepts that behave like values in the template but are not ordinary page data. The editor can complete fields and navigate to the declared type, but runtime code still has to register the real value or function.</p>
 
 <pre><code>{
   "symbolAnnotations": [
@@ -68,7 +68,7 @@ _, _ = tmpl.ParseFiles("templates/main.gohtml")`}}</code></pre>
 &#64;component Button github.com/example/ui.Button
 */&#125;&#125;</code></pre>
 
-<p>Custom annotation names are open by default when the declaration includes an explicit type, so <code>@component Button github.com/example/ui.Button</code> works even without config. Configured aliases let a project introduce known vocabulary. If the alias has a default type, the template only needs a name. If it has no default type, each declaration must include an explicit type. After parsing, aliases behave like <code>@symbol</code> roots.</p>
+<p>Custom annotation names are open by default when the declaration includes an explicit type, so <code>@component Button github.com/example/ui.Button</code> works even without config. Configured aliases let a project introduce known vocabulary. If the alias has a default type, the template only needs a name. If it has no default type, each declaration must include an explicit type. After parsing, aliases behave like normal typed roots.</p>
 <p>Set <code>symbolStrictMode: true</code> when you want typo protection for annotation names. In strict mode, <code>@jimmy Button github.com/example/ui.Button</code> warns unless <code>jimmy</code> is listed in <code>symbolAnnotations</code>. Use <code>@func</code> instead when the name is callable and you want arity, argument, pipeline, and return-type checks.</p>
 
 <h2>The tunnel</h2>

@@ -63,8 +63,6 @@ pre code {
 .brand { display: inline-flex; min-width: 18rem; align-items: center; gap: .8rem; }
 .brand-mark {
     display: inline-flex;
-    height: 2.3rem;
-    width: 2.3rem;
     align-items: center;
     justify-content: center;
     border-radius: 7px;
@@ -72,6 +70,7 @@ pre code {
     color: #06111d;
     font-weight: 900;
 }
+.brand-mark img { padding:2px; }
 .brand strong { display: block; }
 .brand small { display: block; color: var(--muted); }
 .top-nav { display: flex; gap: .35rem; }

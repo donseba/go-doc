@@ -3,11 +3,12 @@
   "module": "github.com/donseba/go-doc/examples/symbols",
   "templates": {
     "templates/page.gohtml": {
-      "models": {
-        "Page": "github.com/donseba/go-doc/examples/symbols.Page"
-      },
-      "symbols": {
+      "roots": {
+        "Button": "github.com/donseba/go-doc/examples/symbols.Button",
+        "Button2": "github.com/donseba/go-doc/examples/symbols.Button",
         "LikesPoll": "github.com/donseba/go-doc/examples/symbols.Interaction",
+        "Page": "github.com/donseba/go-doc/examples/symbols.Page",
+        "PageTest": "github.com/donseba/go-doc/examples/symbols.Page",
         "PrimaryButton": "github.com/donseba/go-doc/examples/symbols.Button"
       }
     }
@@ -97,6 +98,7 @@
         },
         "Title": {
           "type": "string",
+          "doc": "some Title documentation",
           "file": "models.go",
           "line": 5,
           "column": 2
