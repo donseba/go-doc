@@ -8,7 +8,7 @@ object GoDocEditorRefresh {
     fun refresh(project: Project) {
         ApplicationManager.getApplication().invokeLater {
             if (!project.isDisposed) {
-                DaemonCodeAnalyzer.getInstance(project).restart()
+                DaemonCodeAnalyzer.getInstance(project).restart("go-doc index refreshed")
             }
         }
     }

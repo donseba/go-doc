@@ -4,19 +4,37 @@ plugins {
 }
 
 group = "com.donseba.godoc"
-version = "0.13.0"
+version = "0.13.3"
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 intellijPlatform {
     pluginConfiguration {
         name = "go-doc"
         version = project.version.toString()
-        description = "Template contract completion and diagnostics for Go template files."
+        description = """
+            <p>
+              <b>go-doc</b> adds typed Go template support to GoLand for
+              <code>.gohtml</code>, <code>.tmpl</code>, and <code>.html</code> files.
+            </p>
+            <p>It runs the shared go-doc language server and provides:</p>
+            <ul>
+              <li>contract-aware completions and diagnostics</li>
+              <li>hover, go-to-definition, and document symbols</li>
+              <li>semantic highlighting for roots, fields, methods, functions, generated namespaces, and included templates</li>
+              <li>static FuncMap discovery and provider package support</li>
+            </ul>
+            <p>
+              Declare template contracts with annotations such as <code>@model</code>,
+              <code>@dot</code>, <code>@func</code>, and <code>@gen</code>, or use
+              <code>.go-doc/config.json</code> for shared project configuration.
+            </p>
+            <p><b>Static analysis only:</b> go-doc never executes application code.</p>
+        """.trimIndent()
         ideaVersion {
-            sinceBuild = "241"
+            sinceBuild = "253"
         }
     }
 }

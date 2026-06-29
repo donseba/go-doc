@@ -24,7 +24,7 @@ class RebuildIndexAction : AnAction() {
     }
 
     private fun rebuild(project: Project, selectedPath: String?) {
-        val root = GoDocIndexer.findModuleRoot(selectedPath) ?: project.basePath?.let { File(it) } ?: return
+        val root = GoDocIndexer.findModuleRoot(selectedPath) ?: goDocReadAction { project.basePath }?.let { File(it) } ?: return
         val outDir = File(root, ".go-doc")
         val outFile = File(outDir, "index.json")
         outDir.mkdirs()

@@ -15,38 +15,45 @@ class GoDocGotoDeclarationHandler : GotoDeclarationHandler {
         offset: Int,
         editor: Editor?,
     ): Array<PsiElement>? {
-        val file = sourceElement?.containingFile ?: return null
-        val virtualFile = file.virtualFile ?: return null
-        if (!isSupportedTemplate(virtualFile)) return null
+        return goDocReadAction {
+            val file = sourceElement?.containingFile ?: return@goDocReadAction null
+            val virtualFile = file.virtualFile ?: return@goDocReadAction null
+            if (!isSupportedTemplate(virtualFile)) return@goDocReadAction null
 
-        val project = file.project
-        val index = GoDocIndex.load(project, virtualFile.path)
-        GoDocTemplateContext.templateIncludeAt(file.text, offset, index)?.let { reference ->
-            return targetElement(project, index, reference.targetPath, reference.targetLine, reference.targetColumn)
-        }
+            val project = file.project
+            val index = GoDocIndex.load(project, virtualFile.path)
+            GoDocTemplateContext.templateIncludeAt(file.text, offset, index)?.let { reference ->
+                return@goDocReadAction targetElement(project, index, reference.targetPath, reference.targetLine, reference.targetColumn)
+            }
 
-        GoDocTemplateContext.typedRootReferenceAt(file.text, offset, index)?.let { reference ->
-            val type = index.types[reference.typeName] ?: return null
-            return targetElement(project, index, type.file, type.line, type.column)
-        }
+            GoDocTemplateContext.typeReferenceAt(file.text, offset, index)?.let { reference ->
+                val type = index.types[reference.typeName] ?: return@goDocReadAction null
+                return@goDocReadAction targetElement(project, index, type.file, type.line, type.column)
+            }
 
-        val contract = index.contractForFileAt(project, virtualFile.path, offset) ?: return null
-        GoDocTemplateContext.templateFunctionAt(file.text, offset, index, contract)?.let { reference ->
-            val fn = index.funcs[reference.funcName] ?: return null
-            return targetElement(project, index, fn.file, fn.line, fn.column)
-        }
+            GoDocTemplateContext.typedRootReferenceAt(file.text, offset, index)?.let { reference ->
+                val type = index.types[reference.typeName] ?: return@goDocReadAction null
+                return@goDocReadAction targetElement(project, index, type.file, type.line, type.column)
+            }
 
-        val reference = GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract) ?: return null
-        val owner = index.types[reference.ownerTypeName] ?: return null
-        if (contract.isTypedRoot(reference.memberName, reference.ownerTypeName)) {
-            return targetElement(project, index, owner.file, owner.line, owner.column)
+            val contract = index.contractForFileAt(project, virtualFile.path, offset) ?: return@goDocReadAction null
+            GoDocTemplateContext.templateFunctionAt(file.text, offset, index, contract)?.let { reference ->
+                val fn = index.funcs[reference.funcName] ?: return@goDocReadAction null
+                return@goDocReadAction targetElement(project, index, fn.file, fn.line, fn.column)
+            }
+
+            val reference = GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract) ?: return@goDocReadAction null
+            val owner = index.types[reference.ownerTypeName] ?: return@goDocReadAction null
+            if (contract.isTypedRoot(reference.memberName, reference.ownerTypeName)) {
+                return@goDocReadAction targetElement(project, index, owner.file, owner.line, owner.column)
+            }
+            val field = owner.fields[reference.memberName]
+            if (field != null) {
+                return@goDocReadAction targetElement(project, index, field.file.ifBlank { owner.file }, field.line, field.column)
+            }
+            val method = owner.methods[reference.memberName] ?: return@goDocReadAction null
+            targetElement(project, index, method.file.ifBlank { owner.file }, method.line, method.column)
         }
-        val field = owner.fields[reference.memberName]
-        if (field != null) {
-            return targetElement(project, index, field.file.ifBlank { owner.file }, field.line, field.column)
-        }
-        val method = owner.methods[reference.memberName] ?: return null
-        return targetElement(project, index, method.file.ifBlank { owner.file }, method.line, method.column)
     }
 
     private fun targetElement(

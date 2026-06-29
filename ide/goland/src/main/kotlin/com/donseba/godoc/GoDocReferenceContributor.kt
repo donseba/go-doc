@@ -21,98 +21,101 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
             PlatformPatterns.psiElement(),
             object : PsiReferenceProvider() {
                 override fun getReferencesByElement(element: PsiElement, context: ProcessingContext): Array<PsiReference> {
-                    val file = element.containingFile ?: return PsiReference.EMPTY_ARRAY
-                    val virtualFile = file.virtualFile ?: return PsiReference.EMPTY_ARRAY
-                    if (!isSupportedTemplate(virtualFile)) return PsiReference.EMPTY_ARRAY
+                    return goDocReadAction {
+                        val file = element.containingFile ?: return@goDocReadAction PsiReference.EMPTY_ARRAY
+                        val virtualFile = file.virtualFile ?: return@goDocReadAction PsiReference.EMPTY_ARRAY
+                        if (!isSupportedTemplate(virtualFile)) return@goDocReadAction PsiReference.EMPTY_ARRAY
 
-                    val project = file.project
-                    val index = GoDocIndex.load(project, virtualFile.path)
-                    val elementRange = element.textRange ?: return PsiReference.EMPTY_ARRAY
-                    val references = mutableListOf<PsiReference>()
+                        val project = file.project
+                        val index = GoDocIndex.load(project, virtualFile.path)
+                        val elementRange = element.textRange ?: return@goDocReadAction PsiReference.EMPTY_ARRAY
+                        val references = mutableListOf<PsiReference>()
 
-                    GoDocTemplateContext.typedRootReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
-                        .forEach { ref ->
-                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
-                            val type = index.types[ref.typeName] ?: return@forEach
-                            references.add(
-                                GoDocPsiReference(
-                                    element = element,
-                                    absoluteStart = ref.startOffset,
-                                    absoluteEnd = ref.endOffset,
-                                    target = GoDocTarget(index.rootPath, type.file, type.line, type.column),
-                                ),
-                            )
-                        }
+                        GoDocTemplateContext.typedRootReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
+                            .forEach { ref ->
+                                if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
+                                val type = index.types[ref.typeName] ?: return@forEach
+                                references.add(
+                                    GoDocPsiReference(
+                                        element = element,
+                                        absoluteStart = ref.startOffset,
+                                        absoluteEnd = ref.endOffset,
+                                        target = GoDocTarget(index.rootPath, type.file, type.line, type.column),
+                                    ),
+                                )
+                            }
 
-                    GoDocTemplateContext.typeReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
-                        .forEach { ref ->
-                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
-                            val type = index.types[ref.typeName] ?: return@forEach
-                            references.add(
-                                GoDocPsiReference(
-                                    element = element,
-                                    absoluteStart = ref.startOffset,
-                                    absoluteEnd = ref.endOffset,
-                                    target = GoDocTarget(index.rootPath, type.file, type.line, type.column),
-                                ),
-                            )
-                        }
+                        GoDocTemplateContext.typeReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
+                            .forEach { ref ->
+                                if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
+                                val type = index.types[ref.typeName] ?: return@forEach
+                                references.add(
+                                    GoDocPsiReference(
+                                        element = element,
+                                        absoluteStart = ref.startOffset,
+                                        absoluteEnd = ref.endOffset,
+                                        target = GoDocTarget(index.rootPath, type.file, type.line, type.column),
+                                    ),
+                                )
+                            }
 
-                    GoDocTemplateContext.funcReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
-                        .forEach { ref ->
-                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
-                            val fn = index.funcs[ref.funcName] ?: return@forEach
-                            references.add(
-                                GoDocPsiReference(
-                                    element = element,
-                                    absoluteStart = ref.startOffset,
-                                    absoluteEnd = ref.endOffset,
-                                    target = GoDocTarget(index.rootPath, fn.file, fn.line, fn.column),
-                                ),
-                            )
-                        }
+                        GoDocTemplateContext.funcReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
+                            .forEach { ref ->
+                                if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
+                                val fn = index.funcs[ref.funcName] ?: return@forEach
+                                references.add(
+                                    GoDocPsiReference(
+                                        element = element,
+                                        absoluteStart = ref.startOffset,
+                                        absoluteEnd = ref.endOffset,
+                                        target = GoDocTarget(index.rootPath, fn.file, fn.line, fn.column),
+                                    ),
+                                )
+                            }
 
-                    GoDocTemplateContext.templateIncludeReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
-                        .forEach { ref ->
-                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
-                            references.add(
-                                GoDocPsiReference(
-                                    element = element,
-                                    absoluteStart = ref.startOffset,
-                                    absoluteEnd = ref.endOffset,
-                                    target = GoDocTarget(index.rootPath, ref.targetPath, ref.targetLine, ref.targetColumn),
-                                ),
-                            )
-                        }
+                        GoDocTemplateContext.templateIncludeReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
+                            .forEach { ref ->
+                                if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
+                                references.add(
+                                    GoDocPsiReference(
+                                        element = element,
+                                        absoluteStart = ref.startOffset,
+                                        absoluteEnd = ref.endOffset,
+                                        target = GoDocTarget(index.rootPath, ref.targetPath, ref.targetLine, ref.targetColumn),
+                                    ),
+                                )
+                            }
 
-                    val contract = index.contractForFileAt(project, virtualFile.path, elementRange.startOffset) ?: return references.toTypedArray()
-                    GoDocTemplateContext.fieldReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index, contract)
-                        .forEach { ref ->
-                            if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
-                            val owner = index.types[ref.ownerTypeName] ?: return@forEach
-                            val target = when {
-                                contract.isTypedRoot(ref.memberName, ref.ownerTypeName) -> GoDocTarget(index.rootPath, owner.file, owner.line, owner.column)
-                                owner.fields[ref.memberName] != null -> {
-                                    val field = owner.fields.getValue(ref.memberName)
-                                    GoDocTarget(index.rootPath, field.file.ifBlank { owner.file }, field.line, field.column)
-                                }
-                                owner.methods[ref.memberName] != null -> {
-                                    val method = owner.methods.getValue(ref.memberName)
-                                    GoDocTarget(index.rootPath, method.file.ifBlank { owner.file }, method.line, method.column)
-                                }
-                                else -> null
-                            } ?: return@forEach
-                            references.add(
-                                GoDocPsiReference(
-                                    element = element,
-                                    absoluteStart = ref.startOffset,
-                                    absoluteEnd = ref.endOffset,
-                                    target = target,
-                                ),
-                            )
-                        }
+                        val contract = index.contractForFileAt(project, virtualFile.path, elementRange.startOffset)
+                            ?: return@goDocReadAction references.toTypedArray()
+                        GoDocTemplateContext.fieldReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index, contract)
+                            .forEach { ref ->
+                                if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
+                                val owner = index.types[ref.ownerTypeName] ?: return@forEach
+                                val target = when {
+                                    contract.isTypedRoot(ref.memberName, ref.ownerTypeName) -> GoDocTarget(index.rootPath, owner.file, owner.line, owner.column)
+                                    owner.fields[ref.memberName] != null -> {
+                                        val field = owner.fields.getValue(ref.memberName)
+                                        GoDocTarget(index.rootPath, field.file.ifBlank { owner.file }, field.line, field.column)
+                                    }
+                                    owner.methods[ref.memberName] != null -> {
+                                        val method = owner.methods.getValue(ref.memberName)
+                                        GoDocTarget(index.rootPath, method.file.ifBlank { owner.file }, method.line, method.column)
+                                    }
+                                    else -> null
+                                } ?: return@forEach
+                                references.add(
+                                    GoDocPsiReference(
+                                        element = element,
+                                        absoluteStart = ref.startOffset,
+                                        absoluteEnd = ref.endOffset,
+                                        target = target,
+                                    ),
+                                )
+                            }
 
-                    return references.toTypedArray()
+                        references.toTypedArray()
+                    }
                 }
             },
         )
@@ -145,7 +148,7 @@ private class GoDocPsiReference(
     false,
 ) {
     override fun resolve(): PsiElement? {
-        return targetElement(element.project, target)
+        return goDocReadAction { targetElement(element.project, target) }
     }
 }
 
@@ -158,7 +161,7 @@ private data class GoDocTarget(
 
 private fun targetElement(project: Project, target: GoDocTarget): PsiElement? {
     if (target.file.isBlank()) return null
-    val root = target.root ?: project.basePath ?: return null
+    val root = target.root ?: goDocReadAction { project.basePath } ?: return null
     val targetFile = targetPath(root, target.file)
     val targetVirtualFile = LocalFileSystem.getInstance()
         .findFileByIoFile(targetFile) ?: return null
