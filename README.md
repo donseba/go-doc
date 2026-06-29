@@ -344,10 +344,13 @@ The default configuration is:
   "enabled": true,
   "include": ["/"],
   "exclude": ["vendor"],
+  "providers": [],
   "functions": {},
   "functionMaps": [],
   "discover": {
-    "functionMaps": true
+    "functionMaps": true,
+    "providers": true,
+    "signatures": true
   },
   "templateFunctions": [],
   "symbolAnnotations": [],
@@ -363,6 +366,10 @@ Add `.go-doc/config.json` only when a project needs to change those defaults:
   "enabled": true,
   "include": ["/"],
   "exclude": ["vendor", "tmp", "internal/generated"],
+  "providers": [
+    "github.com/donseba/go-partial",
+    "github.com/donseba/go-partial/exp/..."
+  ],
   "writeIndex": false,
   "functions": {
     "asset": "github.com/example/app.Asset",
@@ -372,7 +379,9 @@ Add `.go-doc/config.json` only when a project needs to change those defaults:
     "github.com/example/app.TemplateFuncs"
   ],
   "discover": {
-    "functionMaps": true
+    "functionMaps": true,
+    "providers": true,
+    "signatures": true
   },
   "templateFunctions": [
     {
@@ -396,7 +405,20 @@ the language server can complete and validate them without repeating `@func` in
 each file. `functionMaps` describes whole static Go FuncMap declarations whose
 string-keyed entries should be available in every template. `discover.functionMaps`
 defaults to `true` and enables scanning included Go files for
-`//go-doc:funcmap` annotations. `templateFunctions` is the richer form for
+`//go-doc:funcmap` annotations. `providers` lists dependency or framework
+packages whose go-doc annotations should be indexed without scanning every
+dependency. Provider entries use Go package patterns: `github.com/acme/ui`
+loads one package, while `github.com/acme/ui/...` loads that subtree.
+Small projects can also declare providers in included Go files:
+
+```go
+// go-doc:provider "github.com/donseba/go-partial"
+// go-doc:provider "github.com/donseba/go-partial/exp/..."
+```
+
+`discover.providers` controls `//go-doc:provider` scanning and
+`discover.signatures` controls `//go-doc:sig` scanning. Both default to `true`.
+`templateFunctions` is the richer form for
 helpers that need multiple signatures or use `//go-doc:sig` comments as their
 source of truth. `//go-doc:sig` can annotate a named Go function or a closure
 assignment such as `funcs["url"] = func(...) { ... }`.
