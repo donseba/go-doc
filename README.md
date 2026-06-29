@@ -157,6 +157,47 @@ Use `@func` for custom helpers that are local to one template:
 For helpers available everywhere, prefer `.go-doc/config.json` so you do not
 repeat the same `@func` declarations across templates.
 
+Configured helpers are still a two-way road. The config teaches go-doc what the
+editor should expect, but your Go application must still register the actual
+function in the `html/template.FuncMap`.
+
+For simple one-signature helpers, `functions` is enough:
+
+```json
+{
+  "functions": {
+    "formatDate": "github.com/example/app.FormatDate"
+  }
+}
+```
+
+For helpers with multiple accepted call forms, use `templateFunctions`:
+
+```json
+{
+  "templateFunctions": [
+    {
+      "name": "async",
+      "path": "github.com/donseba/go-partial/templatefunctions.Async",
+      "signatures": [
+        "func(endpoint string, params ...any) html/template.HTML",
+        "func(interaction github.com/donseba/go-partial.Interaction) html/template.HTML"
+      ]
+    }
+  ]
+}
+```
+
+If `signatures` is omitted, go-doc reads `//go-doc:sig` comments from the
+function at `path`. Configured template function packages are loaded directly,
+so this also works for helper packages that live in dependencies:
+
+```go
+//go-doc:sig func(endpoint string, params ...any) html/template.HTML
+//go-doc:sig func(interaction github.com/donseba/go-partial.Interaction) html/template.HTML
+func Async() {}
+```
+
 Any non-special annotation with a name and type becomes a typed root: a named
 value that go-doc can complete, validate, hover, and navigate. `@model` is the
 recommended convention for page or fragment data. `@symbol`, `@component`,
@@ -238,6 +279,7 @@ The default configuration is:
   "include": ["/"],
   "exclude": ["vendor"],
   "functions": {},
+  "templateFunctions": [],
   "symbolAnnotations": [],
   "symbolStrictMode": false,
   "writeIndex": false
@@ -256,6 +298,12 @@ Add `.go-doc/config.json` only when a project needs to change those defaults:
     "asset": "github.com/example/app.Asset",
     "formatDate": "github.com/example/app.FormatDate"
   },
+  "templateFunctions": [
+    {
+      "name": "async",
+      "path": "github.com/donseba/go-partial/templatefunctions.Async"
+    }
+  ],
   "symbolAnnotations": [
     {
       "name": "component"
@@ -269,7 +317,8 @@ Entries are module-relative paths. `/` means the module root. Excludes win over
 includes. `enabled: false` disables go-doc for the project while leaving the
 editor plugin installed. `functions` describes helpers that are available in every template so
 the language server can complete and validate them without repeating `@func` in
-each file.
+each file. `templateFunctions` is the richer form for helpers that need
+multiple signatures or use `//go-doc:sig` comments as their source of truth.
 `symbolAnnotations` describes custom annotation names that produce typed roots.
 Use this for framework concepts such as `@interaction`, `@component`,
 or any project-specific template value that should be completed and navigated

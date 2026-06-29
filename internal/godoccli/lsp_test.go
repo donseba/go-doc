@@ -128,6 +128,94 @@ func TestLSPGenNamespaceActsLikeTypedAccessor(t *testing.T) {
 	}
 }
 
+func TestLSPFunctionSignatureOverloads(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.Interaction": {
+				Name: "Interaction",
+				Fields: map[string]fieldIndex{
+					"Endpoint": {Type: "string"},
+				},
+			},
+		},
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.Async": {
+				Name: "Async",
+				Signatures: []goFuncSignatureIndex{
+					{
+						Signature: "func(endpoint string, params ...any) html/template.HTML",
+						Params:    []string{"string", "...any"},
+						Results:   []string{"html/template.HTML"},
+						Result:    "html/template.HTML",
+					},
+					{
+						Signature: "func(interaction example.com/app.Interaction) html/template.HTML",
+						Params:    []string{"example.com/app.Interaction"},
+						Results:   []string{"html/template.HTML"},
+						Result:    "html/template.HTML",
+					},
+				},
+			},
+		},
+		Short: map[string][]string{"Interaction": {"example.com/app.Interaction"}},
+	}}
+	contract := templateIndex{
+		Roots: map[string]string{"AsyncInteraction": "example.com/app.Interaction"},
+		Funcs: map[string]string{"async": "example.com/app.Async"},
+	}
+
+	valid := diagnosticsForText(`{{ async "/stats" }}
+{{ async "/rows/:row" "row" 10 }}
+{{ async AsyncInteraction }}`, idx, contract)
+	if len(valid) != 0 {
+		t.Fatalf("valid diagnostics = %#v, want none", valid)
+	}
+
+	invalid := diagnosticsForText(`{{ async 10 }}`, idx, contract)
+	assertDiagnostic(t, invalid, "Cannot pass int to async argument 1 because it expects string")
+}
+
+func TestLSPFunctionSignatureHoverFormatsOverloads(t *testing.T) {
+	idx := indexFile{
+		Funcs: map[string]goFuncIndex{
+			"example.com/app.Async": {
+				Name: "Async",
+				Doc:  "Async calls an URL and loads it into the given ID.",
+				Signatures: []goFuncSignatureIndex{
+					{Signature: "func(endpoint string, params ...any) html/template.HTML"},
+					{Signature: "func(interaction github.com/donseba/go-partial.Interaction) html/template.HTML"},
+				},
+			},
+		},
+		Templates: map[string]templateIndex{
+			"template.gohtml": {
+				Funcs: map[string]string{"async": "example.com/app.Async"},
+			},
+		},
+	}
+	text := `{{ async Async }}`
+	server := &lspServer{root: ".", idx: idx, docs: map[string]string{"file:///template.gohtml": text}}
+	result := server.hover(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: "file:///template.gohtml"},
+		Position:     positionAt(text, strings.Index(text, "async")+1),
+	})
+	got, ok := result.(hover)
+	if !ok {
+		t.Fatalf("hover result = %#v", result)
+	}
+	contents, ok := got.Contents.(map[string]string)
+	if !ok {
+		t.Fatalf("hover contents = %#v", got.Contents)
+	}
+	value := contents["value"]
+	if !strings.Contains(value, "func(endpoint string, params ...any) html/template.HTML\nfunc(interaction github.com/donseba/go-partial.Interaction) html/template.HTML") {
+		t.Fatalf("hover signatures not separated by newline:\n%s", value)
+	}
+	if strings.Contains(value, "go-doc:sig") {
+		t.Fatalf("hover contains raw go-doc:sig comments:\n%s", value)
+	}
+}
+
 func TestLSPDiagnosticsCatchModelFunctionNameCollisions(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{

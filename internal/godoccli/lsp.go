@@ -1042,6 +1042,9 @@ func mergeInlineContract(text string, idx lspIndex, base templateIndex) template
 		}
 	}
 	for _, match := range funcPattern.FindAllStringSubmatch(text, -1) {
+		if match[2] == "" {
+			continue
+		}
 		funcs[match[1]] = normalizeType(match[2])
 	}
 	for _, match := range genPattern.FindAllStringSubmatch(text, -1) {
@@ -1850,6 +1853,22 @@ func methodArgumentDiagnosticForAction(text string, actionStart int, actionText 
 }
 
 func functionArgumentDiagnostic(text string, actionStart int, name string, functionEnd int, fn goFuncIndex, args []templateArg, idx lspIndex, contract templateIndex, dotType string) (diagnostic, bool) {
+	var first diagnostic
+	var hasFirst bool
+	for _, variant := range functionSignatureVariants(fn) {
+		item, ok := functionArgumentDiagnosticSingle(text, actionStart, name, functionEnd, variant, args, idx, contract, dotType)
+		if !ok {
+			return diagnostic{}, false
+		}
+		if !hasFirst {
+			first = item
+			hasFirst = true
+		}
+	}
+	return first, hasFirst
+}
+
+func functionArgumentDiagnosticSingle(text string, actionStart int, name string, functionEnd int, fn goFuncIndex, args []templateArg, idx lspIndex, contract templateIndex, dotType string) (diagnostic, bool) {
 	if item, ok := functionArityDiagnostic(text, actionStart, name, functionEnd, fn, args); ok {
 		return item, true
 	}
@@ -1873,6 +1892,23 @@ func functionArgumentDiagnostic(text string, actionStart int, name string, funct
 		}, true
 	}
 	return diagnostic{}, false
+}
+
+func functionSignatureVariants(fn goFuncIndex) []goFuncIndex {
+	if len(fn.Signatures) == 0 {
+		return []goFuncIndex{fn}
+	}
+	variants := make([]goFuncIndex, 0, len(fn.Signatures))
+	for _, signature := range fn.Signatures {
+		variant := fn
+		variant.Signature = signature.Signature
+		variant.Params = signature.Params
+		variant.Result = signature.Result
+		variant.Results = signature.Results
+		variant.ReturnOK = len(signature.Results) > 0 || signature.Result != ""
+		variants = append(variants, variant)
+	}
+	return variants
 }
 
 func unsupportedFunctionReturnDiagnostic(text string, actionStart int, name string, functionStart, functionEnd int, fn goFuncIndex) (diagnostic, bool) {
@@ -2654,10 +2690,7 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 			}
 		}
 		fn := idx.Funcs[contract.Funcs[name]]
-		signature := fn.Signature
-		if signature == "" {
-			signature = "func " + name
-		}
+		signature := functionSignatureText(fn, name)
 		return hover{
 			Contents: markdown(fmt.Sprintf("```go\n%s\n```\n%s", signature, fn.Doc)),
 			Range:    rangeFromOffsets(text, start, end),
@@ -2685,6 +2718,24 @@ func (s *lspServer) hover(params textDocumentPositionParams) any {
 		}
 	}
 	return nil
+}
+
+func functionSignatureText(fn goFuncIndex, fallback string) string {
+	if len(fn.Signatures) > 0 {
+		lines := make([]string, 0, len(fn.Signatures))
+		for _, signature := range fn.Signatures {
+			if signature.Signature != "" {
+				lines = append(lines, signature.Signature)
+			}
+		}
+		if len(lines) > 0 {
+			return strings.Join(lines, "\n")
+		}
+	}
+	if fn.Signature != "" {
+		return fn.Signature
+	}
+	return "func " + fallback
 }
 
 func (s *lspServer) definition(params textDocumentPositionParams) any {
@@ -3623,6 +3674,9 @@ func templateFunctionResultType(fn goFuncIndex) string {
 }
 
 func functionResults(fn goFuncIndex) []string {
+	if len(fn.Signatures) > 0 {
+		return fn.Signatures[0].Results
+	}
 	if len(fn.Results) > 0 {
 		return fn.Results
 	}

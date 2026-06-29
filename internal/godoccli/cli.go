@@ -73,17 +73,25 @@ type (
 	}
 
 	goFuncIndex struct {
-		Name      string   `json:"name"`
-		Package   string   `json:"package"`
-		File      string   `json:"file"`
-		Line      int      `json:"line,omitempty"`
-		Column    int      `json:"column,omitempty"`
-		Doc       string   `json:"doc,omitempty"`
+		Name       string                 `json:"name"`
+		Package    string                 `json:"package"`
+		File       string                 `json:"file"`
+		Line       int                    `json:"line,omitempty"`
+		Column     int                    `json:"column,omitempty"`
+		Doc        string                 `json:"doc,omitempty"`
+		Result     string                 `json:"result,omitempty"`
+		Results    []string               `json:"results,omitempty"`
+		ReturnOK   bool                   `json:"returnOK,omitempty"`
+		Signature  string                 `json:"signature,omitempty"`
+		Params     []string               `json:"params,omitempty"`
+		Signatures []goFuncSignatureIndex `json:"signatures,omitempty"`
+	}
+
+	goFuncSignatureIndex struct {
+		Signature string   `json:"signature"`
+		Params    []string `json:"params,omitempty"`
 		Result    string   `json:"result,omitempty"`
 		Results   []string `json:"results,omitempty"`
-		ReturnOK  bool     `json:"returnOK,omitempty"`
-		Signature string   `json:"signature,omitempty"`
-		Params    []string `json:"params,omitempty"`
 	}
 
 	problem struct {
@@ -95,10 +103,17 @@ type (
 		Include           []string                 `json:"include"`
 		Exclude           []string                 `json:"exclude"`
 		Functions         map[string]string        `json:"functions"`
+		TemplateFunctions []templateFunctionConfig `json:"templateFunctions"`
 		SymbolAnnotations []symbolAnnotationConfig `json:"symbolAnnotations"`
 		SymbolStrict      bool                     `json:"symbolStrictMode"`
 		Enabled           *bool                    `json:"enabled"`
 		WriteIndex        bool                     `json:"writeIndex"`
+	}
+
+	templateFunctionConfig struct {
+		Name       string   `json:"name"`
+		Path       string   `json:"path,omitempty"`
+		Signatures []string `json:"signatures,omitempty"`
 	}
 
 	symbolAnnotationConfig struct {
@@ -135,7 +150,8 @@ func (tmpl templateIndex) hasContracts() bool {
 
 var (
 	dotPattern                    = regexp.MustCompile(`(?m)^\s*@dot\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
-	funcPattern                   = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
+	funcPattern                   = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_./-]*))?\s*$`)
+	goDocSigPattern               = regexp.MustCompile(`(?m)^\s*(?://\s*)?go-doc:sig\s+(.+?)\s*$`)
 	genPattern                    = regexp.MustCompile(`(?m)^\s*@gen\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
 	annotationPattern             = regexp.MustCompile(`(?m)^\s*@([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*))?\s*$`)
 	templateCommentPattern        = regexp.MustCompile(`(?s)\{\{/\*(.*?)\*/\}\}`)
@@ -315,6 +331,10 @@ func buildIndexWithMode(root string, requireTemplateContracts bool) (indexFile, 
 	if err := scanGoTypes(absRoot, cfg, &idx); err != nil {
 		return indexFile{}, false, err
 	}
+	if err := scanConfiguredTemplateFunctionPackages(absRoot, cfg, &idx); err != nil {
+		return indexFile{}, false, err
+	}
+	applyConfiguredTemplateFunctions(cfg, &idx)
 	sortShortNames(idx.Short)
 	validateTemplateTypes(&idx)
 
@@ -364,6 +384,58 @@ func scanGoTypes(root string, cfg indexConfig, idx *indexFile) error {
 		indexPackageTypes(root, fileSet, pkg, idx)
 	}
 	return nil
+}
+
+func scanConfiguredTemplateFunctionPackages(root string, cfg indexConfig, idx *indexFile) error {
+	packagesToLoad := configuredTemplateFunctionPackages(cfg)
+	if len(packagesToLoad) == 0 {
+		return nil
+	}
+	fileSet := token.NewFileSet()
+	loaded, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedSyntax |
+			packages.NeedTypes |
+			packages.NeedTypesInfo |
+			packages.NeedModule,
+		Dir:  root,
+		Fset: fileSet,
+	}, packagesToLoad...)
+	if err != nil {
+		return err
+	}
+	for _, pkg := range loaded {
+		if len(pkg.Errors) > 0 {
+			for _, pkgErr := range pkg.Errors {
+				idx.Problems = append(idx.Problems, problem{File: pkgErr.Pos, Message: pkgErr.Msg})
+			}
+		}
+		if pkg.Types == nil {
+			continue
+		}
+		indexPackageTypes(root, fileSet, pkg, idx)
+	}
+	return nil
+}
+
+func configuredTemplateFunctionPackages(cfg indexConfig) []string {
+	seen := make(map[string]bool)
+	var packages []string
+	for _, fn := range cfg.TemplateFunctions {
+		if len(fn.Signatures) > 0 {
+			continue
+		}
+		pkgPath := packagePathFromQualifiedName(normalizeType(strings.TrimSpace(fn.Path)))
+		if pkgPath == "" || strings.HasPrefix(pkgPath, "$go-doc/") || seen[pkgPath] {
+			continue
+		}
+		seen[pkgPath] = true
+		packages = append(packages, pkgPath)
+	}
+	sort.Strings(packages)
+	return packages
 }
 
 func shouldIndexPackage(root string, pkg *packages.Package, cfg indexConfig) bool {
@@ -452,10 +524,11 @@ func indexPackageFuncDecl(root string, fileSet *token.FileSet, pkg *packages.Pac
 			typ.Methods = make(map[string]methodIndex)
 		}
 		results := signatureResults(sig, pkg.Types)
+		methodDoc := docText(fn.Doc)
 		typ.Methods[obj.Name()] = methodIndex{
 			Type:      templateValueResultType(results),
 			Signature: types.TypeString(sig, typeQualifier(pkg.Types)),
-			Doc:       docText(fn.Doc),
+			Doc:       stripGoDocSignatureDocs(methodDoc),
 			File:      rel(root, position.Filename),
 			Line:      position.Line,
 			Column:    position.Column,
@@ -465,20 +538,203 @@ func indexPackageFuncDecl(root string, fileSet *token.FileSet, pkg *packages.Pac
 		return
 	}
 	results := signatureResults(sig, pkg.Types)
+	funcDoc := docText(fn.Doc)
+	signatures := parseGoDocSignatures(funcDoc)
 	indexReachableTypes(root, fileSet, idx, pkg.Types, sig, nil)
 	idx.Funcs[qualifiedObjectName(obj)] = goFuncIndex{
-		Name:      obj.Name(),
-		Package:   obj.Pkg().Path(),
-		File:      rel(root, position.Filename),
-		Line:      position.Line,
-		Column:    position.Column,
-		Doc:       docText(fn.Doc),
+		Name:       obj.Name(),
+		Package:    obj.Pkg().Path(),
+		File:       rel(root, position.Filename),
+		Line:       position.Line,
+		Column:     position.Column,
+		Doc:        stripGoDocSignatureDocs(funcDoc),
+		Result:     templateValueResultType(results),
+		Results:    results,
+		ReturnOK:   true,
+		Signature:  types.TypeString(sig, typeQualifier(pkg.Types)),
+		Params:     signatureParams(sig, pkg.Types),
+		Signatures: signatures,
+	}
+}
+
+func applyConfiguredTemplateFunctions(cfg indexConfig, idx *indexFile) {
+	for _, fn := range cfg.TemplateFunctions {
+		name := strings.TrimSpace(fn.Name)
+		if name == "" {
+			continue
+		}
+		path := normalizeType(strings.TrimSpace(fn.Path))
+		if path == "" {
+			path = virtualTemplateFunctionPath(name)
+		}
+		existing := idx.Funcs[path]
+		if existing.Name == "" {
+			existing.Name = name
+		}
+		if existing.Package == "" && !strings.HasPrefix(path, "$go-doc/") {
+			existing.Package = packagePathFromQualifiedName(path)
+		}
+		if len(fn.Signatures) > 0 {
+			existing.Signatures = parseSignatureList(fn.Signatures)
+			if len(existing.Signatures) > 0 {
+				existing.Signature = existing.Signatures[0].Signature
+				existing.Params = existing.Signatures[0].Params
+				existing.Result = existing.Signatures[0].Result
+				existing.Results = existing.Signatures[0].Results
+				existing.ReturnOK = len(existing.Results) > 0 || existing.Result != ""
+			}
+		}
+		idx.Funcs[path] = existing
+	}
+}
+
+func packagePathFromQualifiedName(name string) string {
+	if dot := strings.LastIndex(name, "."); dot >= 0 {
+		return name[:dot]
+	}
+	return ""
+}
+
+func parseGoDocSignatures(doc string) []goFuncSignatureIndex {
+	var signatures []string
+	for _, match := range goDocSigPattern.FindAllStringSubmatch(doc, -1) {
+		signatures = append(signatures, match[1])
+	}
+	return parseSignatureList(signatures)
+}
+
+func stripGoDocSignatureDocs(doc string) string {
+	if strings.TrimSpace(doc) == "" {
+		return ""
+	}
+	var lines []string
+	for _, line := range strings.Split(doc, "\n") {
+		if goDocSigPattern.MatchString(line) {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func parseSignatureList(values []string) []goFuncSignatureIndex {
+	var out []goFuncSignatureIndex
+	for _, value := range values {
+		if signature, ok := parseTemplateFunctionSignature(value); ok {
+			out = append(out, signature)
+		}
+	}
+	return out
+}
+
+func parseTemplateFunctionSignature(value string) (goFuncSignatureIndex, bool) {
+	signature := strings.TrimSpace(value)
+	if !strings.HasPrefix(signature, "func") {
+		return goFuncSignatureIndex{}, false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(signature, "func"))
+	if !strings.HasPrefix(rest, "(") {
+		return goFuncSignatureIndex{}, false
+	}
+	close := matchingParenInString(rest, 0)
+	if close < 0 {
+		return goFuncSignatureIndex{}, false
+	}
+	params := parseSignatureParams(rest[1:close])
+	results := parseSignatureResults(strings.TrimSpace(rest[close+1:]))
+	return goFuncSignatureIndex{
+		Signature: signature,
+		Params:    params,
 		Result:    templateValueResultType(results),
 		Results:   results,
-		ReturnOK:  true,
-		Signature: types.TypeString(sig, typeQualifier(pkg.Types)),
-		Params:    signatureParams(sig, pkg.Types),
+	}, true
+}
+
+func matchingParenInString(value string, open int) int {
+	depth := 0
+	for i := open; i < len(value); i++ {
+		switch value[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
 	}
+	return -1
+}
+
+func parseSignatureParams(value string) []string {
+	parts := splitTopLevelComma(value)
+	params := make([]string, 0, len(parts))
+	for _, part := range parts {
+		typ := signaturePartType(part)
+		if typ != "" {
+			params = append(params, normalizeType(typ))
+		}
+	}
+	return params
+}
+
+func parseSignatureResults(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if strings.HasPrefix(value, "(") {
+		if close := matchingParenInString(value, 0); close == len(value)-1 {
+			value = value[1:close]
+		}
+	}
+	parts := splitTopLevelComma(value)
+	results := make([]string, 0, len(parts))
+	for _, part := range parts {
+		typ := signaturePartType(part)
+		if typ != "" {
+			results = append(results, normalizeType(typ))
+		}
+	}
+	return results
+}
+
+func signaturePartType(part string) string {
+	fields := strings.Fields(strings.TrimSpace(part))
+	if len(fields) == 0 {
+		return ""
+	}
+	if len(fields) == 1 {
+		return fields[0]
+	}
+	return fields[len(fields)-1]
+}
+
+func splitTopLevelComma(value string) []string {
+	var parts []string
+	start := 0
+	depth := 0
+	for i, r := range value {
+		switch r {
+		case '[', '(', '{':
+			depth++
+		case ']', ')', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				if part := strings.TrimSpace(value[start:i]); part != "" {
+					parts = append(parts, part)
+				}
+				start = i + len(string(r))
+			}
+		}
+	}
+	if part := strings.TrimSpace(value[start:]); part != "" {
+		parts = append(parts, part)
+	}
+	return parts
 }
 
 func namedStruct(typ types.Type) (*types.Named, *types.Struct) {
@@ -779,7 +1035,7 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 		src := string(data)
 		roots := parseTypedRootMap(src, cfg)
 		dot := parseDot(src)
-		funcs := contractFuncs(cfg.Functions, parseFuncs(src))
+		funcs := contractFuncs(configuredFunctionMap(cfg), parseFuncs(src))
 		gens := parseGens(src)
 		if len(roots) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
 			scanTemplateDefines(root, path, src, cfg, idx)
@@ -803,7 +1059,7 @@ func scanTemplateDefines(root, path, src string, cfg indexConfig, idx *indexFile
 		body := defineContractText(src, match[0], match[4], match[5])
 		roots := parseTypedRootMap(body, cfg)
 		dot := parseDot(body)
-		funcs := contractFuncs(cfg.Functions, parseFuncs(body))
+		funcs := contractFuncs(configuredFunctionMap(cfg), parseFuncs(body))
 		gens := parseGens(body)
 		if len(roots) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
 			continue
@@ -961,9 +1217,44 @@ func contractFuncs(defaults, local map[string]string) map[string]string {
 		funcs[name] = normalizeType(fn)
 	}
 	for name, fn := range local {
+		if fn == "" {
+			if defaults[name] != "" {
+				funcs[name] = normalizeType(defaults[name])
+			}
+			continue
+		}
 		funcs[name] = normalizeType(fn)
 	}
 	return funcs
+}
+
+func configuredFunctionMap(cfg indexConfig) map[string]string {
+	if len(cfg.Functions) == 0 && len(cfg.TemplateFunctions) == 0 {
+		return nil
+	}
+	funcs := make(map[string]string, len(cfg.Functions)+len(cfg.TemplateFunctions))
+	for name, path := range cfg.Functions {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(path) == "" {
+			continue
+		}
+		funcs[name] = normalizeType(path)
+	}
+	for _, fn := range cfg.TemplateFunctions {
+		name := strings.TrimSpace(fn.Name)
+		if name == "" {
+			continue
+		}
+		path := strings.TrimSpace(fn.Path)
+		if path == "" {
+			path = virtualTemplateFunctionPath(name)
+		}
+		funcs[name] = normalizeType(path)
+	}
+	return funcs
+}
+
+func virtualTemplateFunctionPath(name string) string {
+	return "$go-doc/templatefunc." + name
 }
 
 func contractScanText(src string) string {

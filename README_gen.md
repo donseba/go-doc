@@ -384,12 +384,19 @@ the application's FuncMap:
 {
   "functions": {
     "money": "github.com/example/app/viewfuncs.Money"
-  }
+  },
+  "templateFunctions": [
+    {
+      "name": "async",
+      "path": "github.com/donseba/go-partial/templatefunctions.Async"
+    }
+  ]
 }
 ```
 
 That configuration does not create runtime helpers. It only tells go-doc that
-the helpers are available.
+the helpers are available. Use `templateFunctions` when a helper has multiple
+valid call forms or when the target function exposes `//go-doc:sig` comments.
 
 `@gen` is different because it produces Go code that can be registered at
 runtime.
