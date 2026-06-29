@@ -3258,6 +3258,21 @@ func semanticTokensForTextScoped(text string, idx lspIndex, contract templateInd
 		}
 		tokens = append(tokens, semanticToken{start: nameStart, length: nameEnd - nameStart, tokenType: semanticFunction})
 	}
+	for _, match := range genPattern.FindAllStringSubmatchIndex(text, -1) {
+		nameStart, nameEnd := match[2], match[3]
+		pkgStart, pkgEnd := match[4], match[5]
+		name := text[nameStart:nameEnd]
+		pkg := strings.TrimSpace(text[pkgStart:pkgEnd])
+		if contract.Gens[name] != "" && contract.Gens[name] != pkg {
+			continue
+		}
+		if _, _, ok := contract.typedRootType(name); !ok && contract.Gens[name] == "" {
+			continue
+		}
+		tokens = append(tokens, semanticToken{start: nameStart, length: nameEnd - nameStart, tokenType: semanticAccessor})
+		shortStart := pkgStart + len(pkg) - len(shortTypeName(pkg))
+		tokens = append(tokens, semanticToken{start: shortStart, length: pkgEnd - shortStart, tokenType: semanticType})
+	}
 	for _, ref := range typedRootDeclarationRefs(text, idx.symbolParseConfig()) {
 		if ref.unknown {
 			continue
@@ -4140,6 +4155,27 @@ func matchingOpenParen(text string, close int) int {
 }
 
 func typeReferenceAt(text string, offset int, idx lspIndex) (typeRef, bool) {
+	for _, match := range genPattern.FindAllStringSubmatchIndex(text, -1) {
+		nameStart, nameEnd := match[2], match[3]
+		pkgStart, pkgEnd := match[4], match[5]
+		name := text[nameStart:nameEnd]
+		typeName := genTypePrefix + name
+		if _, ok := idx.Types[typeName]; !ok {
+			continue
+		}
+		if offset >= nameStart && offset <= nameEnd {
+			return typeRef{typeName: typeName, start: nameStart, end: nameEnd}, true
+		}
+		if offset < pkgStart || offset > pkgEnd {
+			continue
+		}
+		pkg := strings.TrimSpace(text[pkgStart:pkgEnd])
+		shortStart := pkgStart + len(pkg) - len(shortTypeName(pkg))
+		if offset < shortStart {
+			return typeRef{}, false
+		}
+		return typeRef{typeName: typeName, start: shortStart, end: pkgEnd}, true
+	}
 	for _, match := range lspDotTypeRegexp.FindAllStringSubmatchIndex(text, -1) {
 		start, end := match[2], match[3]
 		if offset < start || offset > end {

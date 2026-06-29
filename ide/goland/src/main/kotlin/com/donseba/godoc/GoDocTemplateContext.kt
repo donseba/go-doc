@@ -144,6 +144,9 @@ object GoDocTemplateContext {
     }
 
     fun typeReferenceAt(text: String, offset: Int, index: GoDocIndex): GoDocTypeReference? {
+        generatedNamespaceTypeReferences(text, index)
+            .firstOrNull { offset >= it.startOffset && offset <= it.endOffset }
+            ?.let { return it }
         typedRootReferences(text, index)
             .firstOrNull { offset >= it.startOffset && offset <= it.endOffset }
             ?.let { return GoDocTypeReference(it.typeName, it.startOffset, it.endOffset) }
@@ -293,7 +296,7 @@ object GoDocTemplateContext {
     }
 
     private fun typedRootReferences(text: String, index: GoDocIndex): List<GoDocTypedRootReference> {
-        return annotationContractPattern.findAll(contractScanTextWithOffsets(text))
+        val refs = annotationContractPattern.findAll(contractScanTextWithOffsets(text))
             .flatMap { match ->
                 val annotation = match.groupValues[1]
                 val nameRange = match.groups[2]?.range ?: return@flatMap emptyList()
@@ -314,10 +317,21 @@ object GoDocTemplateContext {
                 refs
             }
             .toList()
+            .toMutableList()
+        for (match in genContractPattern.findAll(contractScanTextWithOffsets(text))) {
+            val nameRange = match.groups[1]?.range ?: continue
+            val typeName = "$GEN_TYPE_PREFIX${match.groupValues[1]}"
+            if (!index.types.containsKey(typeName)) continue
+            refs.add(GoDocTypedRootReference(typeName, nameRange.first, nameRange.last + 1))
+        }
+        return refs
     }
 
     fun typeReferencesInRange(text: String, startOffset: Int, endOffset: Int, index: GoDocIndex): List<GoDocTypeReference> {
-        return typeMatches(text, startOffset).asSequence()
+        val refs = generatedNamespaceTypeReferences(text, index)
+            .filter { it.startOffset < endOffset && it.endOffset > startOffset }
+            .toMutableList()
+        refs.addAll(typeMatches(text, startOffset).asSequence()
             .takeWhile { (it.groups[1]?.range?.first ?: Int.MAX_VALUE) < endOffset }
             .mapNotNull { match ->
                 val range = match.groups[1]?.range ?: return@mapNotNull null
@@ -328,7 +342,20 @@ object GoDocTemplateContext {
                 if (shortStart >= endOffset || range.last + 1 <= startOffset) return@mapNotNull null
                 GoDocTypeReference(resolved, shortStart, range.last + 1)
             }
-            .toList()
+            .toList())
+        return refs.distinctBy { "${it.startOffset}:${it.endOffset}:${it.typeName}" }
+    }
+
+    private fun generatedNamespaceTypeReferences(text: String, index: GoDocIndex): List<GoDocTypeReference> {
+        return genContractPattern.findAll(contractScanTextWithOffsets(text)).mapNotNull { match ->
+            val packageRange = match.groups[2]?.range ?: return@mapNotNull null
+            val typeName = "$GEN_TYPE_PREFIX${match.groupValues[1]}"
+            if (!index.types.containsKey(typeName)) return@mapNotNull null
+            val pkg = match.groupValues[2]
+            val shortName = pkg.substringAfterLast('/')
+            val shortStart = packageRange.first + pkg.length - shortName.length
+            GoDocTypeReference(typeName, shortStart, packageRange.last + 1)
+        }.toList()
     }
 
     private fun typeMatches(text: String, startOffset: Int = 0): List<MatchResult> {

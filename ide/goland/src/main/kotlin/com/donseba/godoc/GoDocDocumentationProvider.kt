@@ -5,6 +5,14 @@ import com.intellij.psi.PsiElement
 
 class GoDocDocumentationProvider : AbstractDocumentationProvider() {
     override fun generateDoc(element: PsiElement, originalElement: PsiElement?): String? {
+        return goDocReadAction { generateDocUnderReadAction(element, originalElement) }
+    }
+
+    override fun getQuickNavigateInfo(element: PsiElement, originalElement: PsiElement?): String? {
+        return goDocReadAction { getQuickNavigateInfoUnderReadAction(element, originalElement) }
+    }
+
+    private fun generateDocUnderReadAction(element: PsiElement, originalElement: PsiElement?): String? {
         val source = originalElement ?: element
         val file = source.containingFile ?: return null
         val virtualFile = file.virtualFile ?: return null
@@ -24,6 +32,16 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
         }
 
         val hoverOffsets = hoverOffsets(source, file.text)
+        hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.typeReferenceAt(file.text, offset, index)
+        }?.let { reference ->
+            val type = index.types[reference.typeName] ?: return null
+            val doc = type.doc.ifBlank { "No type documentation found in the Go source." }
+            return """
+                <div class="definition"><b>${escape(type.name)}</b> <code>${escape(type.fqName)}</code></div>
+                <div class="content">${escape(doc).replace("\n", "<br/>")}</div>
+            """.trimIndent()
+        }
         hoverOffsets.firstNotNullOfOrNull { offset ->
             GoDocTemplateContext.typedRootReferenceAt(file.text, offset, index)
         }?.let { reference ->
@@ -83,7 +101,7 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
         return null
     }
 
-    override fun getQuickNavigateInfo(element: PsiElement, originalElement: PsiElement?): String? {
+    private fun getQuickNavigateInfoUnderReadAction(element: PsiElement, originalElement: PsiElement?): String? {
         val source = originalElement ?: element
         val file = source.containingFile ?: return null
         val virtualFile = file.virtualFile ?: return null
@@ -99,6 +117,12 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
         }
 
         val hoverOffsets = hoverOffsets(source, file.text)
+        hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.typeReferenceAt(file.text, offset, index)
+        }?.let { reference ->
+            val type = index.types[reference.typeName] ?: return null
+            return "${type.name} ${type.fqName}".trim()
+        }
         hoverOffsets.firstNotNullOfOrNull { offset ->
             GoDocTemplateContext.typedRootReferenceAt(file.text, offset, index)
         }?.let { reference ->

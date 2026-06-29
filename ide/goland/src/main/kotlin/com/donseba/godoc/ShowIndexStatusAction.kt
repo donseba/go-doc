@@ -11,9 +11,10 @@ class ShowIndexStatusAction : AnAction() {
         val filePath = event.getData(com.intellij.openapi.actionSystem.CommonDataKeys.VIRTUAL_FILE)?.path
         val index = GoDocIndex.load(project, filePath)
         val source = index.source ?: "no optional .go-doc/index.json file"
-        val relative = relativePath(project.basePath, filePath)
+        val basePath = goDocReadAction { project.basePath }
+        val relative = relativePath(basePath, filePath)
         val contract = index.contractForFile(project, filePath)
-        val root = GoDocIndexer.findModuleRoot(filePath ?: project.basePath) ?: project.basePath?.let { File(it) }
+        val root = GoDocIndexer.findModuleRoot(filePath ?: basePath) ?: basePath?.let { File(it) }
         val installedVersion = root?.let { GoDocIndexer.commandVersion("go-doc", it) } ?: "-"
         val shadowIndex = root?.let { GoDocIndexer.shadowIndexFile(it) }
         val content = listOf(
@@ -23,7 +24,7 @@ class ShowIndexStatusAction : AnAction() {
             "Enabled: ${root?.let { GoDocIndexer.enabled(project, it) } ?: "-"}",
             "Write project index: ${root?.let { GoDocIndexer.autoIndexEnabled(project, it) } ?: "-"}",
             "Index root: ${index.rootPath ?: "-"}",
-            "Project: ${project.basePath ?: "-"}",
+            "Project: ${basePath ?: "-"}",
             "File: ${relative ?: "-"}",
             "Installed version: $installedVersion",
             "LSP executable: ${GoDocIndexer.lastLspExecutable ?: "-"}",

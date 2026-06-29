@@ -1534,6 +1534,79 @@ func TestLSPSemanticTokensHighlightDeclaredFunctionTypes(t *testing.T) {
 	}
 }
 
+func TestLSPSemanticTokensHighlightGeneratedNamespaces(t *testing.T) {
+	text := `{{/*
+@gen time github.com/donseba/go-doc/examples/exp-gen/internal/timefuncs
+@gen money github.com/donseba/go-doc/examples/exp-gen/internal/moneyfuncs
+*/}}`
+	contract := templateIndex{
+		Roots: map[string]string{
+			"time":  "$go-doc/gen.time",
+			"money": "$go-doc/gen.money",
+		},
+		Gens: map[string]string{
+			"time":  "github.com/donseba/go-doc/examples/exp-gen/internal/timefuncs",
+			"money": "github.com/donseba/go-doc/examples/exp-gen/internal/moneyfuncs",
+		},
+	}
+
+	tokens := semanticTokensForText(text, lspIndex{}, contract)
+	for _, want := range []struct {
+		value     string
+		tokenType int
+	}{
+		{"time", semanticAccessor},
+		{"money", semanticAccessor},
+		{"timefuncs", semanticType},
+		{"moneyfuncs", semanticType},
+	} {
+		if !hasSemanticToken(text, tokens, want.value, want.tokenType) {
+			t.Fatalf("tokens = %#v, want semantic token %q type %d", tokens, want.value, want.tokenType)
+		}
+	}
+}
+
+func TestLSPDefinitionForGeneratedNamespaceDeclarations(t *testing.T) {
+	text := `{{/*
+@gen time example.com/app/internal/timefuncs
+*/}}`
+	contract := templateIndex{
+		Roots: map[string]string{"time": "$go-doc/gen.time"},
+		Gens:  map[string]string{"time": "example.com/app/internal/timefuncs"},
+	}
+	server := &lspServer{
+		root: "C:/project",
+		idx: indexFile{
+			Version:   2,
+			Templates: map[string]templateIndex{"templates/page.gohtml": contract},
+			Types: map[string]goTypeIndex{
+				"$go-doc/gen.time": {
+					Name:    "time",
+					Package: "example.com/app/internal/timefuncs",
+					File:    "internal/timefuncs/time.go",
+					Line:    3,
+					Column:  1,
+					Fields:  map[string]fieldIndex{},
+				},
+			},
+			Funcs: map[string]goFuncIndex{},
+			Short: map[string][]string{},
+		},
+		docs: map[string]string{"file:///C:/project/templates/page.gohtml": text},
+	}
+
+	for _, target := range []string{"time", "timefuncs"} {
+		definitionResult := server.definition(textDocumentPositionParams{
+			TextDocument: textDocumentIdentifier{URI: "file:///C:/project/templates/page.gohtml"},
+			Position:     positionAt(text, strings.Index(text, target)+1),
+		})
+		gotLocation, ok := definitionResult.(location)
+		if !ok || !strings.HasSuffix(filepath.ToSlash(gotLocation.URI), "/internal/timefuncs/time.go") {
+			t.Fatalf("definition(%s) = %#v, want generated namespace package location", target, definitionResult)
+		}
+	}
+}
+
 func TestLSPFindsDeclaredFunctionOperands(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{

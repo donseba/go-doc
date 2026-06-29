@@ -88,7 +88,7 @@ class GoDocIndex(
 
         fun load(project: Project, filePath: String?): GoDocIndex {
             val checked = mutableListOf<String>()
-            val root = GoDocIndexer.findModuleRoot(filePath) ?: project.basePath?.let { File(it) }
+            val root = GoDocIndexer.findModuleRoot(filePath) ?: goDocReadAction { project.basePath }?.let { File(it) }
             if (root != null && !GoDocIndexer.enabled(project, root)) {
                 return empty(checkedPaths = checked)
             }
@@ -149,11 +149,13 @@ class GoDocIndex(
             }
 
             val candidates = mutableListOf<File>()
-            project.basePath?.let {
-                candidates.add(File(it, ".go-doc/index.json"))
-            }
-            ProjectRootManager.getInstance(project).contentRoots.forEach { root ->
-                candidates.add(File(root.path, ".go-doc/index.json"))
+            goDocReadAction {
+                project.basePath?.let {
+                    candidates.add(File(it, ".go-doc/index.json"))
+                }
+                ProjectRootManager.getInstance(project).contentRoots.forEach { root ->
+                    candidates.add(File(root.path, ".go-doc/index.json"))
+                }
             }
 
             for (candidate in candidates.distinctBy { it.path }) {
@@ -210,7 +212,7 @@ class GoDocIndex(
         }
 
         fun refreshVirtualIndex(project: Project) {
-            project.basePath?.let {
+            goDocReadAction { project.basePath }?.let {
                 LocalFileSystem.getInstance().refreshAndFindFileByPath("$it/.go-doc/index.json")
             }
         }
@@ -358,7 +360,7 @@ class GoDocIndex(
     }
 
     private fun contractForFileText(project: Project, path: String, text: String?, offset: Int?): TemplateContract? {
-        val basePath = rootPath ?: project.basePath ?: return null
+        val basePath = rootPath ?: goDocReadAction { project.basePath } ?: return null
         val relative = try {
             File(basePath).toPath().relativize(File(path).toPath()).toString().replace('\\', '/')
         } catch (_: Exception) {
@@ -695,12 +697,16 @@ class GoDocIndex(
     }
 
     private fun templateText(filePath: String): String? {
-        val virtualFile = LocalFileSystem.getInstance().findFileByIoFile(File(filePath))
-        if (virtualFile != null) {
-            FileDocumentManager.getInstance().getDocument(virtualFile)?.let { document ->
-                return document.text
+        val documentText = goDocReadAction {
+            val virtualFile = LocalFileSystem.getInstance().findFileByIoFile(File(filePath))
+            if (virtualFile != null) {
+                FileDocumentManager.getInstance().getDocument(virtualFile)?.let { document ->
+                    return@goDocReadAction document.text
+                }
             }
+            null
         }
+        if (documentText != null) return documentText
         return try {
             File(filePath).readText()
         } catch (_: Exception) {

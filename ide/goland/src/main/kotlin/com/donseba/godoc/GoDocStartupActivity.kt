@@ -13,7 +13,7 @@ class GoDocStartupActivity : ProjectActivity {
     override suspend fun execute(project: Project) {
         GoDocIndexWatcher.install(project)
 
-        val basePath = project.basePath ?: return
+        val basePath = goDocReadAction { project.basePath } ?: return
         val root = GoDocIndexer.findModuleRoot(basePath) ?: File(basePath)
         if (!File(root, "go.mod").isFile) return
         if (!GoDocIndexer.enabled(project, root)) return

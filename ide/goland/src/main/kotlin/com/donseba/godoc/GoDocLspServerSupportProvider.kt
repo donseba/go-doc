@@ -9,6 +9,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
+import com.intellij.platform.lsp.api.customization.LspCustomization
 import com.intellij.platform.lsp.api.customization.LspSemanticTokensSupport
 import com.intellij.psi.PsiFile
 import com.intellij.ui.JBColor
@@ -24,7 +25,7 @@ internal class GoDocLspServerSupportProvider : LspServerSupportProvider {
         file: VirtualFile,
         serverStarter: LspServerSupportProvider.LspServerStarter,
     ) {
-        val root = GoDocIndexer.findModuleRoot(file.path) ?: project.basePath?.let { java.io.File(it) }
+        val root = GoDocIndexer.findModuleRoot(file.path) ?: goDocReadAction { project.basePath }?.let { java.io.File(it) }
         if (isSupportedTemplate(file) && (root == null || GoDocIndexer.enabled(project, root))) {
             serverStarter.ensureServerStarted(GoDocLspServerDescriptor(project))
         }
@@ -32,36 +33,37 @@ internal class GoDocLspServerSupportProvider : LspServerSupportProvider {
 }
 
 private class GoDocLspServerDescriptor(project: Project) : ProjectWideLspServerDescriptor(project, "go-doc") {
-    @Deprecated("JetBrains keeps semantic token support on this compatibility property in 2025.x.")
-    override val lspSemanticTokensSupport = object : LspSemanticTokensSupport() {
-        override val tokenTypes: List<String> = listOf("variable", "property", "type", "function")
-        override val tokenModifiers: List<String> = emptyList()
+    override val lspCustomization = object : LspCustomization() {
+        override val semanticTokensCustomizer = object : LspSemanticTokensSupport() {
+            override val tokenTypes: List<String> = listOf("variable", "property", "type", "function")
+            override val tokenModifiers: List<String> = emptyList()
 
-        override fun shouldAskServerForSemanticTokens(psiFile: PsiFile): Boolean {
-            return isSupportedTemplate(psiFile.virtualFile)
-        }
+            override fun shouldAskServerForSemanticTokens(psiFile: PsiFile): Boolean {
+                return goDocReadAction { isSupportedTemplate(psiFile.virtualFile) }
+            }
 
-        override fun getTextAttributesKey(
-            tokenType: String,
-            modifiers: List<String>,
-        ): TextAttributesKey? {
-            return when (tokenType) {
-                "variable" -> GO_DOC_ACCESSOR
-                "property" -> GO_DOC_FIELD
-                "type" -> GO_DOC_TYPE
-                "function" -> GO_DOC_FUNCTION
-                else -> null
+            override fun getTextAttributesKey(
+                tokenType: String,
+                modifiers: List<String>,
+            ): TextAttributesKey? {
+                return when (tokenType) {
+                    "variable" -> GO_DOC_ACCESSOR
+                    "property" -> GO_DOC_FIELD
+                    "type" -> GO_DOC_TYPE
+                    "function" -> GO_DOC_FUNCTION
+                    else -> null
+                }
             }
         }
     }
 
     override fun isSupportedFile(file: VirtualFile): Boolean {
-        val root = GoDocIndexer.findModuleRoot(file.path) ?: project.basePath?.let { java.io.File(it) }
+        val root = GoDocIndexer.findModuleRoot(file.path) ?: goDocReadAction { project.basePath }?.let { java.io.File(it) }
         return isSupportedTemplate(file) && (root == null || GoDocIndexer.enabled(project, root))
     }
 
     override fun createCommandLine(): GeneralCommandLine {
-        val root = project.basePath ?: "."
+        val root = goDocReadAction { project.basePath } ?: "."
         val executable = goDocLspExecutable(root)
         GoDocIndexer.rememberLspExecutable(executable, File(root))
         return GeneralCommandLine(executable, "lsp", root).withWorkDirectory(root)
@@ -77,6 +79,7 @@ private val GO_DOC_FIELD = clickableKey("GO_DOC_FIELD", JBColor(0x9CDCFE, 0x9CDC
 private val GO_DOC_TYPE = clickableKey("GO_DOC_TYPE", JBColor(0x4EC9B0, 0x4EC9B0))
 private val GO_DOC_FUNCTION = clickableKey("GO_DOC_FUNCTION", JBColor(0xDCDCAA, 0xDCDCAA))
 
+@Suppress("DEPRECATION")
 private fun clickableKey(name: String, color: JBColor): TextAttributesKey {
     return TextAttributesKey.createTextAttributesKey(
         name,

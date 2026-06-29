@@ -1,8 +1,8 @@
 {
   "name": "go-doc-vscode",
   "displayName": "go-doc",
-  "description": "Template contract completion and diagnostics for Go template files.",
-  "version": "0.13.0",
+  "description": "Typed Go template contracts with completion, diagnostics, hover, navigation, semantic highlighting, static FuncMap discovery, and provider package support.",
+  "version": "0.13.3",
   "publisher": "donseba",
   "author": {
     "name": "Sebastiano Bellinzis",

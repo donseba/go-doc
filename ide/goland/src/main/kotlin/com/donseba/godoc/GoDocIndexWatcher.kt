@@ -62,7 +62,7 @@ object GoDocIndexWatcher {
     }
 
     private fun shouldTriggerIndex(project: Project, path: String): Boolean {
-        val basePath = project.basePath ?: return false
+        val basePath = goDocReadAction { project.basePath } ?: return false
         val normalized = path.replace('\\', '/')
         if (!normalized.startsWith(basePath.replace('\\', '/'))) return false
         if (ignoredPath(normalized)) return false
