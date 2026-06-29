@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -103,11 +104,17 @@ type (
 		Include           []string                 `json:"include"`
 		Exclude           []string                 `json:"exclude"`
 		Functions         map[string]string        `json:"functions"`
+		FunctionMaps      []string                 `json:"functionMaps"`
+		Discover          discoverConfig           `json:"discover"`
 		TemplateFunctions []templateFunctionConfig `json:"templateFunctions"`
 		SymbolAnnotations []symbolAnnotationConfig `json:"symbolAnnotations"`
 		SymbolStrict      bool                     `json:"symbolStrictMode"`
 		Enabled           *bool                    `json:"enabled"`
 		WriteIndex        bool                     `json:"writeIndex"`
+	}
+
+	discoverConfig struct {
+		FunctionMaps *bool `json:"functionMaps"`
 	}
 
 	templateFunctionConfig struct {
@@ -125,6 +132,21 @@ type (
 		Annotation string
 		Name       string
 		Type       string
+	}
+
+	templateFunctionSource struct {
+		Name     string
+		Target   string
+		FuncMap  string
+		File     string
+		Priority int
+	}
+
+	templateFunctionRegistry struct {
+		funcs        map[string]templateFunctionSource
+		byPrio       map[int]map[string][]templateFunctionSource
+		seenFuncMaps map[string]bool
+		problem      []problem
 	}
 )
 
@@ -148,10 +170,26 @@ func (tmpl templateIndex) hasContracts() bool {
 	return len(tmpl.Roots) > 0 || tmpl.Dot != "" || len(tmpl.Funcs) > 0 || len(tmpl.Gens) > 0
 }
 
+const (
+	goDocSigAnnotation = "go-doc:sig"
+	funcMapAnnotation  = "go-doc:funcmap"
+
+	functionSourceAnnotatedFuncMap = 20
+	functionSourceConfigFuncMap    = 30
+	functionSourceConfigFunction   = 40
+
+	funcMapInvalidAnnotationMessage = "go-doc: //go-doc:funcmap must annotate a func or var returning template.FuncMap, map[string]any, or map[string]interface{}"
+	funcMapDynamicMessage           = "go-doc: dynamic funcmap construction is not supported yet; use a direct composite literal"
+	funcMapDynamicKeyMessage        = "go-doc: funcmap entry uses a dynamic key and was skipped"
+	funcMapMissingMessageFormat     = "go-doc: functionMap %s not found"
+	funcMapInvalidReturnFormat      = "go-doc: functionMap %s does not return template.FuncMap or map[string]any"
+)
+
 var (
 	dotPattern                    = regexp.MustCompile(`(?m)^\s*@dot\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*)\s*$`)
 	funcPattern                   = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_./-]*))?\s*$`)
-	goDocSigPattern               = regexp.MustCompile(`(?m)^\s*(?://\s*)?go-doc:sig\s+(.+?)\s*$`)
+	goDocSigPattern               = regexp.MustCompile(`(?m)^\s*(?://\s*)?` + goDocSigAnnotation + `\s+(.+?)\s*$`)
+	funcMapAnnotationPattern      = regexp.MustCompile(`(?m)^\s*(?://\s*)?` + funcMapAnnotation + `\s*$`)
 	genPattern                    = regexp.MustCompile(`(?m)^\s*@gen\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
 	annotationPattern             = regexp.MustCompile(`(?m)^\s*@([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*))?\s*$`)
 	templateCommentPattern        = regexp.MustCompile(`(?s)\{\{/\*(.*?)\*/\}\}`)
@@ -189,6 +227,16 @@ var ReservedTemplateNames = map[string]bool{
 	"with":     true,
 }
 
+var defaultSkippedDirs = map[string]bool{
+	".git":         true,
+	".idea":        true,
+	"node_modules": true,
+	"references":   true,
+	"dist":         true,
+	"build":        true,
+	"out":          true,
+}
+
 func Main() {
 	if err := Run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -203,7 +251,7 @@ func Run(args []string) error {
 
 	switch args[0] {
 	case "version", "--version", "-version":
-		fmt.Fprintln(os.Stdout, Version)
+		_, _ = fmt.Fprintln(os.Stdout, Version)
 		return nil
 
 	case "types":
@@ -321,20 +369,35 @@ func buildIndexWithMode(root string, requireTemplateContracts bool) (indexFile, 
 	}
 	idx.Module = module
 
-	if err := scanTemplates(absRoot, cfg, &idx); err != nil {
+	if requireTemplateContracts {
+		if err := scanTemplates(absRoot, cfg, configuredFunctionMap(cfg), &idx); err != nil {
+			return indexFile{}, false, err
+		}
+		needed := hasTemplateContracts(idx)
+		if !needed && len(cfg.FunctionMaps) == 0 && !hasAnnotatedFuncMapFiles(absRoot, cfg) {
+			return idx, false, nil
+		}
+		idx.Templates = make(map[string]templateIndex)
+	}
+
+	funcs := newTemplateFunctionRegistry()
+	if err := scanGoTypes(absRoot, cfg, &idx, funcs); err != nil {
+		return indexFile{}, false, err
+	}
+	if err := scanConfiguredTemplateFunctionPackages(absRoot, cfg, &idx, funcs); err != nil {
+		return indexFile{}, false, err
+	}
+	applyConfiguredTemplateFunctions(cfg, &idx)
+	addConfiguredTemplateFunctionDefaults(cfg, funcs)
+	idx.Problems = append(idx.Problems, funcs.problem...)
+
+	if err := scanTemplates(absRoot, cfg, funcs.functionMap(), &idx); err != nil {
 		return indexFile{}, false, err
 	}
 	needed := hasTemplateContracts(idx)
 	if requireTemplateContracts && !needed {
 		return idx, false, nil
 	}
-	if err := scanGoTypes(absRoot, cfg, &idx); err != nil {
-		return indexFile{}, false, err
-	}
-	if err := scanConfiguredTemplateFunctionPackages(absRoot, cfg, &idx); err != nil {
-		return indexFile{}, false, err
-	}
-	applyConfiguredTemplateFunctions(cfg, &idx)
 	sortShortNames(idx.Short)
 	validateTemplateTypes(&idx)
 
@@ -355,7 +418,7 @@ func readModulePath(root string) (string, error) {
 	return "", errors.New("go.mod has no module line")
 }
 
-func scanGoTypes(root string, cfg indexConfig, idx *indexFile) error {
+func scanGoTypes(root string, cfg indexConfig, idx *indexFile, funcs *templateFunctionRegistry) error {
 	fileSet := token.NewFileSet()
 	loaded, err := packages.Load(&packages.Config{
 		Mode: packages.NeedName |
@@ -382,13 +445,15 @@ func scanGoTypes(root string, cfg indexConfig, idx *indexFile) error {
 			continue
 		}
 		indexPackageTypes(root, fileSet, pkg, idx)
+		discoverAnnotatedFuncMaps(root, fileSet, pkg, cfg, idx, funcs)
 	}
 	return nil
 }
 
-func scanConfiguredTemplateFunctionPackages(root string, cfg indexConfig, idx *indexFile) error {
+func scanConfiguredTemplateFunctionPackages(root string, cfg indexConfig, idx *indexFile, funcs *templateFunctionRegistry) error {
 	packagesToLoad := configuredTemplateFunctionPackages(cfg)
 	if len(packagesToLoad) == 0 {
+		reportMissingConfiguredFuncMaps(cfg, funcs)
 		return nil
 	}
 	fileSet := token.NewFileSet()
@@ -416,7 +481,9 @@ func scanConfiguredTemplateFunctionPackages(root string, cfg indexConfig, idx *i
 			continue
 		}
 		indexPackageTypes(root, fileSet, pkg, idx)
+		extractConfiguredFuncMaps(root, fileSet, pkg, cfg, idx, funcs)
 	}
+	reportMissingConfiguredFuncMaps(cfg, funcs)
 	return nil
 }
 
@@ -429,6 +496,14 @@ func configuredTemplateFunctionPackages(cfg indexConfig) []string {
 		}
 		pkgPath := packagePathFromQualifiedName(normalizeType(strings.TrimSpace(fn.Path)))
 		if pkgPath == "" || strings.HasPrefix(pkgPath, "$go-doc/") || seen[pkgPath] {
+			continue
+		}
+		seen[pkgPath] = true
+		packages = append(packages, pkgPath)
+	}
+	for _, funcMap := range cfg.FunctionMaps {
+		pkgPath := packagePathFromQualifiedName(normalizeType(strings.TrimSpace(funcMap)))
+		if pkgPath == "" || seen[pkgPath] {
 			continue
 		}
 		seen[pkgPath] = true
@@ -465,6 +540,313 @@ func indexPackageTypes(root string, fileSet *token.FileSet, pkg *packages.Packag
 			}
 		}
 	}
+}
+
+func discoverAnnotatedFuncMaps(root string, fileSet *token.FileSet, pkg *packages.Package, cfg indexConfig, idx *indexFile, funcs *templateFunctionRegistry) {
+	if !cfg.discoverFunctionMaps() {
+		return
+	}
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			switch decl := decl.(type) {
+			case *ast.FuncDecl:
+				if !hasFuncMapAnnotation(decl.Doc) {
+					continue
+				}
+				extractFuncMapFromFuncDecl(root, fileSet, pkg, idx, funcs, decl, functionSourceAnnotatedFuncMap)
+			case *ast.GenDecl:
+				declAnnotated := hasFuncMapAnnotation(decl.Doc)
+				if declAnnotated && decl.Tok != token.VAR {
+					pos := fileSet.Position(decl.Pos())
+					funcs.problem = append(funcs.problem, problem{
+						File:    rel(root, pos.Filename),
+						Message: funcMapInvalidAnnotationMessage,
+					})
+					continue
+				}
+				if decl.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range decl.Specs {
+					valueSpec, ok := spec.(*ast.ValueSpec)
+					if !ok || (!declAnnotated && !hasFuncMapAnnotation(valueSpec.Doc)) {
+						continue
+					}
+					extractFuncMapFromValueSpec(root, fileSet, pkg, idx, funcs, valueSpec, functionSourceAnnotatedFuncMap, "")
+				}
+			}
+		}
+	}
+}
+
+func extractConfiguredFuncMaps(root string, fileSet *token.FileSet, pkg *packages.Package, cfg indexConfig, idx *indexFile, funcs *templateFunctionRegistry) {
+	for _, raw := range cfg.FunctionMaps {
+		funcMap := normalizeType(strings.TrimSpace(raw))
+		if funcMap == "" || packagePathFromQualifiedName(funcMap) != pkg.PkgPath {
+			continue
+		}
+		symbol := symbolNameFromQualifiedName(funcMap)
+		found := false
+		for _, file := range pkg.Syntax {
+			for _, decl := range file.Decls {
+				switch decl := decl.(type) {
+				case *ast.FuncDecl:
+					if decl.Name.Name != symbol {
+						continue
+					}
+					found = true
+					extractFuncMapFromFuncDecl(root, fileSet, pkg, idx, funcs, decl, functionSourceConfigFuncMap)
+				case *ast.GenDecl:
+					if decl.Tok != token.VAR {
+						continue
+					}
+					for _, spec := range decl.Specs {
+						valueSpec, ok := spec.(*ast.ValueSpec)
+						if !ok || !valueSpecHasName(valueSpec, symbol) {
+							continue
+						}
+						found = true
+						extractFuncMapFromValueSpec(root, fileSet, pkg, idx, funcs, valueSpec, functionSourceConfigFuncMap, symbol)
+					}
+				}
+			}
+		}
+		if found {
+			funcs.seenFuncMaps[funcMap] = true
+		}
+	}
+}
+
+func reportMissingConfiguredFuncMaps(cfg indexConfig, funcs *templateFunctionRegistry) {
+	for _, raw := range cfg.FunctionMaps {
+		funcMap := normalizeType(strings.TrimSpace(raw))
+		if funcMap == "" || funcs.seenFuncMaps[funcMap] {
+			continue
+		}
+		funcs.problem = append(funcs.problem, problem{Message: fmt.Sprintf(funcMapMissingMessageFormat, funcMap)})
+	}
+}
+
+func extractFuncMapFromFuncDecl(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, funcs *templateFunctionRegistry, decl *ast.FuncDecl, priority int) {
+	obj, _ := pkg.TypesInfo.Defs[decl.Name].(*types.Func)
+	funcMapName := qualifiedObjectName(obj)
+	if funcMapName == "" && pkg.Types != nil {
+		funcMapName = pkg.Types.Path() + "." + decl.Name.Name
+	}
+	pos := fileSet.Position(decl.Name.Pos())
+	if obj == nil || !funcMapLikeFunc(obj.Type()) {
+		funcs.problem = append(funcs.problem, problem{
+			File:    rel(root, pos.Filename),
+			Message: fmt.Sprintf(funcMapInvalidReturnFormat, funcMapName),
+		})
+		return
+	}
+	lit := directFuncMapReturnLiteral(decl)
+	if lit == nil {
+		funcs.problem = append(funcs.problem, problem{
+			File:    rel(root, pos.Filename),
+			Message: funcMapDynamicMessage,
+		})
+		return
+	}
+	extractFuncMapLiteral(root, fileSet, pkg, idx, funcs, funcMapName, lit, priority)
+	funcs.seenFuncMaps[funcMapName] = true
+}
+
+func extractFuncMapFromValueSpec(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, funcs *templateFunctionRegistry, spec *ast.ValueSpec, priority int, onlyName string) {
+	for i, name := range spec.Names {
+		if onlyName != "" && name.Name != onlyName {
+			continue
+		}
+		obj := pkg.TypesInfo.Defs[name]
+		funcMapName := qualifiedObjectName(obj)
+		if funcMapName == "" && pkg.Types != nil {
+			funcMapName = pkg.Types.Path() + "." + name.Name
+		}
+		pos := fileSet.Position(name.Pos())
+		var value ast.Expr
+		if i < len(spec.Values) {
+			value = spec.Values[i]
+		} else if len(spec.Values) == 1 {
+			value = spec.Values[0]
+		}
+		lit, ok := value.(*ast.CompositeLit)
+		if !ok || lit == nil {
+			funcs.problem = append(funcs.problem, problem{
+				File:    rel(root, pos.Filename),
+				Message: funcMapDynamicMessage,
+			})
+			continue
+		}
+		if !funcMapLikeType(pkg.TypesInfo.TypeOf(lit)) && !funcMapLikeType(pkg.TypesInfo.TypeOf(spec.Type)) {
+			funcs.problem = append(funcs.problem, problem{
+				File:    rel(root, pos.Filename),
+				Message: funcMapInvalidAnnotationMessage,
+			})
+			continue
+		}
+		extractFuncMapLiteral(root, fileSet, pkg, idx, funcs, funcMapName, lit, priority)
+		funcs.seenFuncMaps[funcMapName] = true
+	}
+}
+
+func extractFuncMapLiteral(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, funcs *templateFunctionRegistry, funcMapName string, lit *ast.CompositeLit, priority int) {
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := staticStringKey(kv.Key)
+		if !ok {
+			pos := fileSet.Position(kv.Key.Pos())
+			funcs.problem = append(funcs.problem, problem{
+				File:    rel(root, pos.Filename),
+				Message: funcMapDynamicKeyMessage,
+			})
+			continue
+		}
+		targetObj := functionObjectForExpr(pkg.TypesInfo, kv.Value)
+		target := qualifiedObjectName(targetObj)
+		if target == "" {
+			continue
+		}
+		ensureFunctionTargetIndexed(root, fileSet, pkg, idx, targetObj)
+		pos := fileSet.Position(kv.Pos())
+		funcs.add(templateFunctionSource{
+			Name:     key,
+			Target:   target,
+			FuncMap:  funcMapName,
+			File:     rel(root, pos.Filename),
+			Priority: priority,
+		})
+	}
+}
+
+func directFuncMapReturnLiteral(decl *ast.FuncDecl) *ast.CompositeLit {
+	if decl.Body == nil {
+		return nil
+	}
+	for _, stmt := range decl.Body.List {
+		ret, ok := stmt.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) != 1 {
+			continue
+		}
+		lit, ok := ret.Results[0].(*ast.CompositeLit)
+		if ok {
+			return lit
+		}
+	}
+	return nil
+}
+
+func hasFuncMapAnnotation(group *ast.CommentGroup) bool {
+	if group == nil {
+		return false
+	}
+	for _, comment := range group.List {
+		if funcMapAnnotationPattern.MatchString(comment.Text) {
+			return true
+		}
+	}
+	return false
+}
+
+func funcMapLikeFunc(typ types.Type) bool {
+	sig, ok := typ.(*types.Signature)
+	if !ok || sig.Results().Len() != 1 {
+		return false
+	}
+	return funcMapLikeType(sig.Results().At(0).Type())
+}
+
+func funcMapLikeType(typ types.Type) bool {
+	if typ == nil {
+		return false
+	}
+	if named, ok := types.Unalias(typ).(*types.Named); ok {
+		obj := named.Obj()
+		if obj != nil && obj.Pkg() != nil && obj.Name() == "FuncMap" {
+			switch obj.Pkg().Path() {
+			case "html/template", "text/template":
+				return true
+			}
+		}
+	}
+	m, ok := types.Unalias(typ).Underlying().(*types.Map)
+	if !ok {
+		return false
+	}
+	key, ok := types.Unalias(m.Key()).(*types.Basic)
+	if !ok || key.Kind() != types.String {
+		return false
+	}
+	iface, ok := types.Unalias(m.Elem()).Underlying().(*types.Interface)
+	return ok && iface.NumMethods() == 0
+}
+
+func staticStringKey(expr ast.Expr) (string, bool) {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	value, err := strconv.Unquote(lit.Value)
+	return value, err == nil
+}
+
+func ensureFunctionTargetIndexed(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, obj types.Object) {
+	fn, ok := obj.(*types.Func)
+	if !ok || qualifiedObjectName(fn) == "" {
+		return
+	}
+	fullName := qualifiedObjectName(fn)
+	if _, ok := idx.Funcs[fullName]; ok {
+		return
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return
+	}
+	results := signatureResults(sig, pkg.Types)
+	position := fileSet.Position(fn.Pos())
+	idx.Funcs[fullName] = goFuncIndex{
+		Name:      fn.Name(),
+		Package:   fn.Pkg().Path(),
+		File:      rel(root, position.Filename),
+		Line:      position.Line,
+		Column:    position.Column,
+		Result:    templateValueResultType(results),
+		Results:   results,
+		ReturnOK:  true,
+		Signature: types.TypeString(sig, typeQualifier(pkg.Types)),
+		Params:    signatureParams(sig, pkg.Types),
+	}
+}
+
+func functionObjectForExpr(info *types.Info, expr ast.Expr) types.Object {
+	switch expr := expr.(type) {
+	case *ast.Ident:
+		return info.Uses[expr]
+	case *ast.SelectorExpr:
+		return info.Uses[expr.Sel]
+	default:
+		return nil
+	}
+}
+
+func valueSpecHasName(spec *ast.ValueSpec, name string) bool {
+	for _, ident := range spec.Names {
+		if ident.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func symbolNameFromQualifiedName(name string) string {
+	if dot := strings.LastIndex(name, "."); dot >= 0 {
+		return name[dot+1:]
+	}
+	return name
 }
 
 func indexPackageTypeDecl(root string, fileSet *token.FileSet, pkg *packages.Package, decl *ast.GenDecl, idx *indexFile) {
@@ -585,6 +967,95 @@ func applyConfiguredTemplateFunctions(cfg indexConfig, idx *indexFile) {
 			}
 		}
 		idx.Funcs[path] = existing
+	}
+}
+
+func newTemplateFunctionRegistry() *templateFunctionRegistry {
+	return &templateFunctionRegistry{
+		funcs:        make(map[string]templateFunctionSource),
+		byPrio:       make(map[int]map[string][]templateFunctionSource),
+		seenFuncMaps: make(map[string]bool),
+	}
+}
+
+func (r *templateFunctionRegistry) add(fn templateFunctionSource) {
+	fn.Name = strings.TrimSpace(fn.Name)
+	fn.Target = normalizeType(strings.TrimSpace(fn.Target))
+	if fn.Name == "" || fn.Target == "" {
+		return
+	}
+	if r.byPrio[fn.Priority] == nil {
+		r.byPrio[fn.Priority] = make(map[string][]templateFunctionSource)
+	}
+	peers := r.byPrio[fn.Priority][fn.Name]
+	for _, peer := range peers {
+		if peer.Target == fn.Target && peer.FuncMap == fn.FuncMap {
+			return
+		}
+	}
+	if len(peers) > 0 {
+		r.problem = append(r.problem, duplicateFunctionProblem(fn.Name, append(peers, fn)))
+	}
+	r.byPrio[fn.Priority][fn.Name] = append(peers, fn)
+	existing, ok := r.funcs[fn.Name]
+	if !ok || fn.Priority >= existing.Priority {
+		r.funcs[fn.Name] = fn
+	}
+}
+
+func (r *templateFunctionRegistry) functionMap() map[string]string {
+	if len(r.funcs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(r.funcs))
+	for name, fn := range r.funcs {
+		out[name] = fn.Target
+	}
+	return out
+}
+
+func duplicateFunctionProblem(name string, funcs []templateFunctionSource) problem {
+	var labels []string
+	file := funcs[len(funcs)-1].File
+	for _, fn := range funcs {
+		label := fn.FuncMap
+		if label == "" {
+			label = fn.Target
+		}
+		if label != "" && !slices.Contains(labels, label) {
+			labels = append(labels, label)
+		}
+	}
+	sort.Strings(labels)
+	message := fmt.Sprintf("function %q is declared by multiple funcmaps: %s", name, strings.Join(labels, ", "))
+	return problem{File: file, Message: message}
+}
+
+func addConfiguredTemplateFunctionDefaults(cfg indexConfig, funcs *templateFunctionRegistry) {
+	for name, path := range cfg.Functions {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(path) == "" {
+			continue
+		}
+		funcs.add(templateFunctionSource{
+			Name:     name,
+			Target:   path,
+			Priority: functionSourceConfigFunction,
+		})
+	}
+	for _, fn := range cfg.TemplateFunctions {
+		name := strings.TrimSpace(fn.Name)
+		if name == "" {
+			continue
+		}
+		path := strings.TrimSpace(fn.Path)
+		if path == "" {
+			path = virtualTemplateFunctionPath(name)
+		}
+		funcs.add(templateFunctionSource{
+			Name:     name,
+			Target:   path,
+			Priority: functionSourceConfigFunction,
+		})
 	}
 }
 
@@ -1009,7 +1480,7 @@ func qualifiedObjectName(obj types.Object) string {
 	return obj.Pkg().Path() + "." + obj.Name()
 }
 
-func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
+func scanTemplates(root string, cfg indexConfig, defaultFuncs map[string]string, idx *indexFile) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -1035,10 +1506,10 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 		src := string(data)
 		roots := parseTypedRootMap(src, cfg)
 		dot := parseDot(src)
-		funcs := contractFuncs(configuredFunctionMap(cfg), parseFuncs(src))
+		funcs := contractFuncs(defaultFuncs, parseFuncs(src))
 		gens := parseGens(src)
 		if len(roots) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
-			scanTemplateDefines(root, path, src, cfg, idx)
+			scanTemplateDefines(root, path, src, cfg, defaultFuncs, idx)
 			return nil
 		}
 
@@ -1048,18 +1519,48 @@ func scanTemplates(root string, cfg indexConfig, idx *indexFile) error {
 			Funcs: funcs,
 			Gens:  gens,
 		}
-		scanTemplateDefines(root, path, src, cfg, idx)
+		scanTemplateDefines(root, path, src, cfg, defaultFuncs, idx)
 		return nil
 	})
 }
 
-func scanTemplateDefines(root, path, src string, cfg indexConfig, idx *indexFile) {
+func hasAnnotatedFuncMapFiles(root string, cfg indexConfig) bool {
+	if !cfg.discoverFunctionMaps() {
+		return false
+	}
+	found := false
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || found {
+			return err
+		}
+		if d.IsDir() {
+			if shouldSkipDir(root, path, d.Name(), cfg) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !shouldIncludePath(root, path, cfg) || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if funcMapAnnotationPattern.Match(data) {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
+func scanTemplateDefines(root, path, src string, cfg indexConfig, defaultFuncs map[string]string, idx *indexFile) {
 	for _, match := range definePattern.FindAllStringSubmatchIndex(src, -1) {
 		name := src[match[2]:match[3]]
 		body := defineContractText(src, match[0], match[4], match[5])
 		roots := parseTypedRootMap(body, cfg)
 		dot := parseDot(body)
-		funcs := contractFuncs(configuredFunctionMap(cfg), parseFuncs(body))
+		funcs := contractFuncs(defaultFuncs, parseFuncs(body))
 		gens := parseGens(body)
 		if len(roots) == 0 && dot == "" && len(funcs) == 0 && len(gens) == 0 {
 			continue
@@ -1343,20 +1844,6 @@ func validateTemplateTypes(idx *indexFile) {
 	}
 }
 
-func resolveIndexType(idx *indexFile, typ string) string {
-	if typ == "" {
-		return ""
-	}
-	if _, ok := idx.Types[typ]; ok {
-		return typ
-	}
-	matches := idx.Short[typ]
-	if len(matches) == 1 {
-		return matches[0]
-	}
-	return ""
-}
-
 const genTypePrefix = "$go-doc/gen."
 
 func validateTemplateGens(idx *indexFile, file string, tmpl *templateIndex) {
@@ -1490,30 +1977,37 @@ func rel(root, path string) string {
 }
 
 func loadIndexConfig(root string) indexConfig {
-	cfg := indexConfig{
-		Include: []string{"/"},
-		Exclude: []string{"vendor"},
-	}
+	cfg := defaultIndexConfig()
 	data, err := os.ReadFile(filepath.Join(root, ".go-doc", "config.json"))
 	if err != nil {
 		return cfg
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return indexConfig{Include: []string{"/"}, Exclude: []string{"vendor"}}
+		return defaultIndexConfig()
 	}
 	if len(cfg.Include) == 0 {
-		cfg.Include = []string{"/"}
+		cfg.Include = defaultIndexConfig().Include
 	}
 	return cfg
+}
+
+func defaultIndexConfig() indexConfig {
+	return indexConfig{
+		Include: []string{"/"},
+		Exclude: []string{"vendor"},
+	}
 }
 
 func (cfg indexConfig) enabled() bool {
 	return cfg.Enabled == nil || *cfg.Enabled
 }
 
+func (cfg indexConfig) discoverFunctionMaps() bool {
+	return cfg.Discover.FunctionMaps == nil || *cfg.Discover.FunctionMaps
+}
+
 func shouldSkipDir(root, path, name string, cfg indexConfig) bool {
-	switch name {
-	case ".git", ".idea", "node_modules", "references":
+	if defaultSkippedDirs[name] {
 		return true
 	}
 	if path != root && hasGoMod(path) {

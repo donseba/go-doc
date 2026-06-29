@@ -833,6 +833,335 @@ type Node struct {
 	}
 }
 
+func TestBuildIndexUsesConfigFunctionMap(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "functionMaps": [
+    "example.com/app.TemplateFuncs"
+  ]
+}`)
+	writeFile(t, root, "funcs.go", `package app
+
+import "html/template"
+
+func TemplateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"asset": Asset,
+	}
+}
+
+func Asset(path string) string {
+	return "/assets/" + path
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `<link href="{{ asset "app.css" }}">`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed when config declares functionMaps")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["asset"]; got != "example.com/app.Asset" {
+		t.Fatalf("funcmap asset = %q", got)
+	}
+	if idx.Funcs["example.com/app.Asset"].Signature == "" {
+		t.Fatalf("asset function metadata missing: %#v", idx.Funcs["example.com/app.Asset"])
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexUsesAnnotatedFunctionMap(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "funcs.go", `package app
+
+import "html/template"
+
+//go-doc:funcmap
+func TemplateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"formatDate": FormatDate,
+	}
+}
+
+func FormatDate(v string) string {
+	return v
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ formatDate "today" }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed when annotations declare function maps")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["formatDate"]; got != "example.com/app.FormatDate" {
+		t.Fatalf("funcmap formatDate = %q", got)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexUsesAnnotatedVarFunctionMap(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "funcs.go", `package app
+
+import "html/template"
+
+//go-doc:funcmap
+var TemplateFuncs = template.FuncMap{
+	"asset": Asset,
+}
+
+func Asset(path string) string {
+	return path
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ asset "app.css" }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["asset"]; got != "example.com/app.Asset" {
+		t.Fatalf("funcmap asset = %q", got)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexFunctionMapDuplicateDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "funcs.go", `package app
+
+import "html/template"
+
+//go-doc:funcmap
+func A() template.FuncMap {
+	return template.FuncMap{
+		"asset": AssetA,
+	}
+}
+
+//go-doc:funcmap
+func B() template.FuncMap {
+	return template.FuncMap{
+		"asset": AssetB,
+	}
+}
+
+func AssetA(path string) string { return path }
+func AssetB(path string) string { return path }
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ asset "app.css" }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	if !hasProblem(idx.Problems, `function "asset" is declared by multiple funcmaps`) {
+		t.Fatalf("duplicate funcmap problem missing: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexExplicitFunctionOverridesFunctionMap(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "functions": {
+    "asset": "example.com/app.AssetOverride"
+  },
+  "functionMaps": [
+    "example.com/app.TemplateFuncs"
+  ]
+}`)
+	writeFile(t, root, "funcs.go", `package app
+
+import "html/template"
+
+func TemplateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"asset": Asset,
+	}
+}
+
+func Asset(path string) string { return path }
+func AssetOverride(path string) string { return "/override/" + path }
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ asset "app.css" }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["asset"]; got != "example.com/app.AssetOverride" {
+		t.Fatalf("asset should resolve to explicit config function, got %q", got)
+	}
+}
+
+func TestBuildIndexFunctionMapInvalidAnnotationAndDynamicConstruction(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "funcs.go", `package app
+
+import "html/template"
+
+//go-doc:funcmap
+func Nope() string {
+	return "nope"
+}
+
+//go-doc:funcmap
+func TemplateFuncs() template.FuncMap {
+	fm := template.FuncMap{}
+	fm["asset"] = Asset
+	return fm
+}
+
+func Asset(path string) string { return path }
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ asset "app.css" }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	if !hasProblem(idx.Problems, "does not return template.FuncMap or map[string]any") {
+		t.Fatalf("invalid annotation problem missing: %#v", idx.Problems)
+	}
+	if !hasProblem(idx.Problems, "dynamic funcmap construction is not supported yet") {
+		t.Fatalf("dynamic construction problem missing: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexFunctionMapSupportsMapStringAnyAndDynamicKeyDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "funcs.go", `package app
+
+const assetName = "asset"
+
+//go-doc:funcmap
+var TemplateFuncs = map[string]any{
+	"format": Format,
+	assetName: Asset,
+}
+
+func Format(v string) string { return v }
+func Asset(path string) string { return path }
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ format "x" }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["format"]; got != "example.com/app.Format" {
+		t.Fatalf("map[string]any format = %q", got)
+	}
+	if _, ok := tmpl.Funcs["asset"]; ok {
+		t.Fatalf("dynamic-key asset should be skipped: %#v", tmpl.Funcs)
+	}
+	if !hasProblem(idx.Problems, "funcmap entry uses a dynamic key and was skipped") {
+		t.Fatalf("dynamic key problem missing: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexFunctionMapSupportsTextTemplateAndMapStringInterface(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "functionMaps": [
+    "example.com/app.TextFuncs"
+  ]
+}`)
+	writeFile(t, root, "funcs.go", `package app
+
+import "text/template"
+
+func TextFuncs() template.FuncMap {
+	return template.FuncMap{
+		"title": Title,
+	}
+}
+
+//go-doc:funcmap
+var InterfaceFuncs = map[string]interface{}{
+	"slug": Slug,
+}
+
+func Title(v string) string { return v }
+func Slug(v string) string { return v }
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ title "x" }} {{ slug "x" }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["title"]; got != "example.com/app.Title" {
+		t.Fatalf("text/template funcmap title = %q", got)
+	}
+	if got := tmpl.Funcs["slug"]; got != "example.com/app.Slug" {
+		t.Fatalf("map[string]interface{} slug = %q", got)
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildTemplateIndexCanDisableFunctionMapDiscovery(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "discover": {
+    "functionMaps": false
+  }
+}`)
+	writeFile(t, root, "funcs.go", `package app
+
+import "html/template"
+
+//go-doc:funcmap
+func TemplateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"asset": Asset,
+	}
+}
+
+func Asset(path string) string { return path }
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ asset "app.css" }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if needed {
+		t.Fatal("index should not be needed when functionMap discovery is disabled and no other contracts exist")
+	}
+	if len(idx.Types) != 0 || len(idx.Funcs) != 0 {
+		t.Fatalf("disabled discovery should not force Go scan, got types=%d funcs=%d", len(idx.Types), len(idx.Funcs))
+	}
+}
+
 func TestIndexCommandRemovesStaleOutputWhenNoParamContractExists(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
@@ -871,4 +1200,13 @@ func writeFile(t *testing.T, root, name, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
+}
+
+func hasProblem(problems []problem, message string) bool {
+	for _, problem := range problems {
+		if strings.Contains(problem.Message, message) {
+			return true
+		}
+	}
+	return false
 }

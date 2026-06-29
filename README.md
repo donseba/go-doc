@@ -171,6 +171,61 @@ For simple one-signature helpers, `functions` is enough:
 }
 ```
 
+### Global FuncMaps
+
+For projects that already collect helpers in a Go `template.FuncMap`, go-doc can
+read direct static FuncMap literals instead of making you repeat every helper in
+`functions`.
+
+For small projects, annotate the FuncMap:
+
+```go
+//go-doc:funcmap
+func TemplateFuncs() template.FuncMap {
+    return template.FuncMap{
+        "asset": Asset,
+    }
+}
+```
+
+Variables work too:
+
+```go
+//go-doc:funcmap
+var TemplateFuncs = template.FuncMap{
+    "asset": Asset,
+}
+```
+
+For larger projects, prefer explicit config:
+
+```json
+{
+  "functionMaps": [
+    "github.com/example/app.TemplateFuncs"
+  ]
+}
+```
+
+`functionMaps` and `//go-doc:funcmap` are statically analyzed. go-doc does not
+execute Go code or use reflection. For v1, use direct composite literals such as
+`template.FuncMap{...}`, `map[string]any{...}`, or
+`map[string]interface{}{...}`. Dynamic construction is reported as unsupported:
+
+```go
+func TemplateFuncs() template.FuncMap {
+    fm := template.FuncMap{}
+    fm["asset"] = Asset
+    return fm
+}
+```
+
+Function sources are merged from broadest to most explicit:
+
+```text
+built-ins < annotated funcmaps < config.functionMaps < config.functions < local @func
+```
+
 For helpers with multiple accepted call forms, use `templateFunctions`:
 
 ```json
@@ -279,6 +334,10 @@ The default configuration is:
   "include": ["/"],
   "exclude": ["vendor"],
   "functions": {},
+  "functionMaps": [],
+  "discover": {
+    "functionMaps": true
+  },
   "templateFunctions": [],
   "symbolAnnotations": [],
   "symbolStrictMode": false,
@@ -297,6 +356,12 @@ Add `.go-doc/config.json` only when a project needs to change those defaults:
   "functions": {
     "asset": "github.com/example/app.Asset",
     "formatDate": "github.com/example/app.FormatDate"
+  },
+  "functionMaps": [
+    "github.com/example/app.TemplateFuncs"
+  ],
+  "discover": {
+    "functionMaps": true
   },
   "templateFunctions": [
     {
@@ -317,8 +382,12 @@ Entries are module-relative paths. `/` means the module root. Excludes win over
 includes. `enabled: false` disables go-doc for the project while leaving the
 editor plugin installed. `functions` describes helpers that are available in every template so
 the language server can complete and validate them without repeating `@func` in
-each file. `templateFunctions` is the richer form for helpers that need
-multiple signatures or use `//go-doc:sig` comments as their source of truth.
+each file. `functionMaps` describes whole static Go FuncMap declarations whose
+string-keyed entries should be available in every template. `discover.functionMaps`
+defaults to `true` and enables scanning included Go files for
+`//go-doc:funcmap` annotations. `templateFunctions` is the richer form for
+helpers that need multiple signatures or use `//go-doc:sig` comments as their
+source of truth.
 `symbolAnnotations` describes custom annotation names that produce typed roots.
 Use this for framework concepts such as `@interaction`, `@component`,
 or any project-specific template value that should be completed and navigated
