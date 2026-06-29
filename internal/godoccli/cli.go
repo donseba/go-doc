@@ -103,6 +103,7 @@ type (
 	indexConfig struct {
 		Include           []string                 `json:"include"`
 		Exclude           []string                 `json:"exclude"`
+		Providers         []string                 `json:"providers"`
 		Functions         map[string]string        `json:"functions"`
 		FunctionMaps      []string                 `json:"functionMaps"`
 		Discover          discoverConfig           `json:"discover"`
@@ -115,6 +116,8 @@ type (
 
 	discoverConfig struct {
 		FunctionMaps *bool `json:"functionMaps"`
+		Providers    *bool `json:"providers"`
+		Signatures   *bool `json:"signatures"`
 	}
 
 	templateFunctionConfig struct {
@@ -173,6 +176,7 @@ func (tmpl templateIndex) hasContracts() bool {
 const (
 	goDocSigAnnotation = "go-doc:sig"
 	funcMapAnnotation  = "go-doc:funcmap"
+	providerAnnotation = "go-doc:provider"
 
 	functionSourceAnnotatedFuncMap = 20
 	functionSourceAnnotatedSig     = 20
@@ -191,6 +195,7 @@ var (
 	funcPattern                   = regexp.MustCompile(`(?m)^\s*@func\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_./-]*))?\s*$`)
 	goDocSigPattern               = regexp.MustCompile(`(?m)^\s*(?://\s*)?` + goDocSigAnnotation + `\s+(.+?)\s*$`)
 	funcMapAnnotationPattern      = regexp.MustCompile(`(?m)^\s*(?://\s*)?` + funcMapAnnotation + `\s*$`)
+	providerAnnotationPattern     = regexp.MustCompile(`(?m)^\s*(?://\s*)?` + providerAnnotation + `\s+"?([^"\s]+)"?\s*$`)
 	genPattern                    = regexp.MustCompile(`(?m)^\s*@gen\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*$`)
 	annotationPattern             = regexp.MustCompile(`(?m)^\s*@([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_./\[\]*-]*))?\s*$`)
 	templateCommentPattern        = regexp.MustCompile(`(?s)\{\{/\*(.*?)\*/\}\}`)
@@ -375,7 +380,7 @@ func buildIndexWithMode(root string, requireTemplateContracts bool) (indexFile, 
 			return indexFile{}, false, err
 		}
 		needed := hasTemplateContracts(idx)
-		if !needed && len(cfg.FunctionMaps) == 0 && !hasAnnotatedFuncMapFiles(absRoot, cfg) {
+		if !needed && len(cfg.FunctionMaps) == 0 && len(providerPatterns(absRoot, cfg)) == 0 && !hasAnnotatedMetadataFiles(absRoot, cfg) {
 			return idx, false, nil
 		}
 		idx.Templates = make(map[string]templateIndex)
@@ -445,15 +450,15 @@ func scanGoTypes(root string, cfg indexConfig, idx *indexFile, funcs *templateFu
 		if pkg.Types == nil || !shouldIndexPackage(root, pkg, cfg) {
 			continue
 		}
-		indexPackageTypes(root, fileSet, pkg, idx)
-		discoverAnnotatedTemplateFunctionSignatures(root, fileSet, pkg, idx, funcs)
+		indexPackageTypes(root, fileSet, pkg, idx, cfg)
+		discoverAnnotatedTemplateFunctionSignatures(root, fileSet, pkg, cfg, idx, funcs)
 		discoverAnnotatedFuncMaps(root, fileSet, pkg, cfg, idx, funcs)
 	}
 	return nil
 }
 
 func scanConfiguredTemplateFunctionPackages(root string, cfg indexConfig, idx *indexFile, funcs *templateFunctionRegistry) error {
-	packagesToLoad := configuredTemplateFunctionPackages(cfg)
+	packagesToLoad := configuredTemplateFunctionPackages(root, cfg)
 	if len(packagesToLoad) == 0 {
 		reportMissingConfiguredFuncMaps(cfg, funcs)
 		return nil
@@ -482,38 +487,97 @@ func scanConfiguredTemplateFunctionPackages(root string, cfg indexConfig, idx *i
 		if pkg.Types == nil {
 			continue
 		}
-		indexPackageTypes(root, fileSet, pkg, idx)
-		discoverAnnotatedTemplateFunctionSignatures(root, fileSet, pkg, idx, funcs)
+		indexPackageTypes(root, fileSet, pkg, idx, cfg)
+		discoverAnnotatedTemplateFunctionSignatures(root, fileSet, pkg, cfg, idx, funcs)
+		discoverAnnotatedFuncMaps(root, fileSet, pkg, cfg, idx, funcs)
 		extractConfiguredFuncMaps(root, fileSet, pkg, cfg, idx, funcs)
 	}
 	reportMissingConfiguredFuncMaps(cfg, funcs)
 	return nil
 }
 
-func configuredTemplateFunctionPackages(cfg indexConfig) []string {
+func configuredTemplateFunctionPackages(root string, cfg indexConfig) []string {
 	seen := make(map[string]bool)
 	var packages []string
+	add := func(pkgPath string) {
+		pkgPath = strings.TrimSpace(pkgPath)
+		if pkgPath == "" || seen[pkgPath] {
+			return
+		}
+		seen[pkgPath] = true
+		packages = append(packages, pkgPath)
+	}
 	for _, fn := range cfg.TemplateFunctions {
 		if len(fn.Signatures) > 0 {
 			continue
 		}
 		pkgPath := packagePathFromQualifiedName(normalizeType(strings.TrimSpace(fn.Path)))
-		if pkgPath == "" || strings.HasPrefix(pkgPath, "$go-doc/") || seen[pkgPath] {
+		if pkgPath == "" || strings.HasPrefix(pkgPath, "$go-doc/") {
 			continue
 		}
-		seen[pkgPath] = true
-		packages = append(packages, pkgPath)
+		add(pkgPath)
 	}
 	for _, funcMap := range cfg.FunctionMaps {
 		pkgPath := packagePathFromQualifiedName(normalizeType(strings.TrimSpace(funcMap)))
-		if pkgPath == "" || seen[pkgPath] {
+		if pkgPath == "" {
 			continue
 		}
-		seen[pkgPath] = true
-		packages = append(packages, pkgPath)
+		add(pkgPath)
+	}
+	for _, provider := range providerPatterns(root, cfg) {
+		add(provider)
 	}
 	sort.Strings(packages)
 	return packages
+}
+
+func providerPatterns(root string, cfg indexConfig) []string {
+	seen := make(map[string]bool)
+	var providers []string
+	add := func(provider string) {
+		provider = strings.TrimSpace(provider)
+		if provider == "" || seen[provider] {
+			return
+		}
+		seen[provider] = true
+		providers = append(providers, provider)
+	}
+	for _, provider := range cfg.Providers {
+		add(provider)
+	}
+	if root != "" && cfg.discoverProviders() {
+		for _, provider := range annotatedProviderPatterns(root, cfg) {
+			add(provider)
+		}
+	}
+	return providers
+}
+
+func annotatedProviderPatterns(root string, cfg indexConfig) []string {
+	var providers []string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if shouldSkipDir(root, path, d.Name(), cfg) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !shouldIncludePath(root, path, cfg) || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, match := range providerAnnotationPattern.FindAllStringSubmatch(string(data), -1) {
+			providers = append(providers, match[1])
+		}
+		return nil
+	})
+	return providers
 }
 
 func shouldIndexPackage(root string, pkg *packages.Package, cfg indexConfig) bool {
@@ -530,7 +594,7 @@ func shouldIndexPackage(root string, pkg *packages.Package, cfg indexConfig) boo
 	return false
 }
 
-func indexPackageTypes(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile) {
+func indexPackageTypes(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, cfg indexConfig) {
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
 			switch decl := decl.(type) {
@@ -539,7 +603,7 @@ func indexPackageTypes(root string, fileSet *token.FileSet, pkg *packages.Packag
 					indexPackageTypeDecl(root, fileSet, pkg, decl, idx)
 				}
 			case *ast.FuncDecl:
-				indexPackageFuncDecl(root, fileSet, pkg, decl, idx)
+				indexPackageFuncDecl(root, fileSet, pkg, decl, idx, cfg)
 			}
 		}
 	}
@@ -582,7 +646,10 @@ func discoverAnnotatedFuncMaps(root string, fileSet *token.FileSet, pkg *package
 	}
 }
 
-func discoverAnnotatedTemplateFunctionSignatures(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, funcs *templateFunctionRegistry) {
+func discoverAnnotatedTemplateFunctionSignatures(root string, fileSet *token.FileSet, pkg *packages.Package, cfg indexConfig, idx *indexFile, funcs *templateFunctionRegistry) {
+	if !cfg.discoverSignatures() {
+		return
+	}
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
 			decl, ok := decl.(*ast.FuncDecl)
@@ -975,7 +1042,7 @@ func indexPackageTypeDecl(root string, fileSet *token.FileSet, pkg *packages.Pac
 	}
 }
 
-func indexPackageFuncDecl(root string, fileSet *token.FileSet, pkg *packages.Package, fn *ast.FuncDecl, idx *indexFile) {
+func indexPackageFuncDecl(root string, fileSet *token.FileSet, pkg *packages.Package, fn *ast.FuncDecl, idx *indexFile, cfg indexConfig) {
 	if !fn.Name.IsExported() {
 		return
 	}
@@ -1017,7 +1084,10 @@ func indexPackageFuncDecl(root string, fileSet *token.FileSet, pkg *packages.Pac
 	}
 	results := signatureResults(sig, pkg.Types)
 	funcDoc := docText(fn.Doc)
-	signatures := parseGoDocSignatures(funcDoc)
+	var signatures []goFuncSignatureIndex
+	if cfg.discoverSignatures() {
+		signatures = parseGoDocSignatures(funcDoc)
+	}
 	indexReachableTypes(root, fileSet, idx, pkg.Types, sig, nil)
 	idx.Funcs[qualifiedObjectName(obj)] = goFuncIndex{
 		Name:       obj.Name(),
@@ -1639,10 +1709,7 @@ func scanTemplates(root string, cfg indexConfig, defaultFuncs map[string]string,
 	})
 }
 
-func hasAnnotatedFuncMapFiles(root string, cfg indexConfig) bool {
-	if !cfg.discoverFunctionMaps() {
-		return false
-	}
+func hasAnnotatedMetadataFiles(root string, cfg indexConfig) bool {
 	found := false
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || found {
@@ -1661,7 +1728,12 @@ func hasAnnotatedFuncMapFiles(root string, cfg indexConfig) bool {
 		if err != nil {
 			return err
 		}
-		if funcMapAnnotationPattern.Match(data) {
+		switch {
+		case cfg.discoverFunctionMaps() && funcMapAnnotationPattern.Match(data):
+			found = true
+		case cfg.discoverProviders() && providerAnnotationPattern.Match(data):
+			found = true
+		case cfg.discoverSignatures() && goDocSigPattern.Match(data):
 			found = true
 		}
 		return nil
@@ -2123,6 +2195,14 @@ func (cfg indexConfig) enabled() bool {
 
 func (cfg indexConfig) discoverFunctionMaps() bool {
 	return cfg.Discover.FunctionMaps == nil || *cfg.Discover.FunctionMaps
+}
+
+func (cfg indexConfig) discoverProviders() bool {
+	return cfg.Discover.Providers == nil || *cfg.Discover.Providers
+}
+
+func (cfg indexConfig) discoverSignatures() bool {
+	return cfg.Discover.Signatures == nil || *cfg.Discover.Signatures
 }
 
 func shouldSkipDir(root, path, name string, cfg indexConfig) bool {

@@ -1017,6 +1017,129 @@ func addRequestFuncs(funcs template.FuncMap) {
 	}
 }
 
+func TestBuildIndexUsesConfiguredProviderPackage(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "exclude": ["framework"],
+  "providers": [
+    "example.com/app/framework"
+  ]
+}`)
+	writeFile(t, root, "framework/funcs.go", `package framework
+
+import (
+	"html/template"
+	"net/url"
+)
+
+//go-doc:funcmap
+var TemplateFuncs = template.FuncMap{
+	"url": URL,
+}
+
+func URL() *url.URL {
+	return nil
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ url.Path }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed when config declares providers")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	if got := tmpl.Funcs["url"]; got != "example.com/app/framework.URL" {
+		t.Fatalf("provider url = %q", got)
+	}
+	if idx.Funcs["example.com/app/framework.URL"].Result != "*net/url.URL" {
+		t.Fatalf("provider function metadata = %#v", idx.Funcs["example.com/app/framework.URL"])
+	}
+}
+
+func TestBuildIndexUsesProviderAnnotation(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "exclude": ["framework"]
+}`)
+	writeFile(t, root, "main.go", `package app
+
+// go-doc:provider "example.com/app/framework/..."
+func main() {}
+`)
+	writeFile(t, root, "framework/runtime/funcs.go", `package runtime
+
+import "html/template"
+
+func Add(funcs template.FuncMap) {
+	// go-doc:sig func() string
+	funcs["basePath"] = func() string {
+		return "/"
+	}
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ basePath }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed when provider annotation is present")
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	target := tmpl.Funcs["basePath"]
+	if target == "" {
+		t.Fatalf("basePath missing from provider funcs: %#v", tmpl.Funcs)
+	}
+	if idx.Funcs[target].Result != "string" {
+		t.Fatalf("basePath metadata = %#v", idx.Funcs[target])
+	}
+}
+
+func TestBuildIndexCanDisableProviderAndSignatureDiscovery(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "discover": {
+    "providers": false,
+    "signatures": false
+  }
+}`)
+	writeFile(t, root, "main.go", `package app
+
+// go-doc:provider "example.com/app/framework/..."
+func main() {}
+`)
+	writeFile(t, root, "framework/runtime/funcs.go", `package runtime
+
+import "html/template"
+
+func Add(funcs template.FuncMap) {
+	// go-doc:sig func() string
+	funcs["basePath"] = func() string {
+		return "/"
+	}
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ basePath }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if needed {
+		t.Fatal("index should not be needed when provider and signature discovery are disabled")
+	}
+	if len(idx.Funcs) != 0 {
+		t.Fatalf("disabled discovery should not index provider funcs: %#v", idx.Funcs)
+	}
+}
+
 func TestBuildIndexUsesAnnotatedVarFunctionMap(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
