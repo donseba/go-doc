@@ -3,6 +3,7 @@ package godoccli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -165,6 +166,87 @@ func FirstUser() User {
 	row := idx.Templates["templates/page.gohtml#table_row"]
 	if row.Dot != "example.com/app.User" {
 		t.Fatalf("row dot = %q", row.Dot)
+	}
+}
+
+func TestBuildIndexReadsGoDocFunctionSignatures(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "helpers.go", `package app
+
+// Async is registered as a template helper.
+//go-doc:sig func(endpoint string, params ...any) html/template.HTML
+//go-doc:sig func(interaction example.com/app.Interaction) html/template.HTML
+func Async() {}
+
+type Interaction struct {
+	Endpoint string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{/*
+@func async example.com/app.Async
+*/}}
+{{ async "/stats" }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed for @func annotations")
+	}
+	fn := idx.Funcs["example.com/app.Async"]
+	if len(fn.Signatures) != 2 {
+		t.Fatalf("signatures = %#v, want 2", fn.Signatures)
+	}
+	if got := fn.Signatures[0].Params; len(got) != 2 || got[0] != "string" || got[1] != "...any" {
+		t.Fatalf("first signature params = %#v", got)
+	}
+	if strings.Contains(fn.Doc, "go-doc:sig") {
+		t.Fatalf("function doc still contains go-doc:sig comments: %q", fn.Doc)
+	}
+	if idx.Templates["templates/page.gohtml"].Funcs["async"] != "example.com/app.Async" {
+		t.Fatalf("template funcs = %#v", idx.Templates["templates/page.gohtml"].Funcs)
+	}
+}
+
+func TestBuildIndexReadsConfiguredTemplateFunctions(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, ".go-doc/config.json", `{
+  "templateFunctions": [
+    {
+      "name": "async",
+      "path": "example.com/app.Async",
+      "signatures": [
+        "func(endpoint string, params ...any) html/template.HTML",
+        "func(interaction example.com/app.Interaction) html/template.HTML"
+      ]
+    }
+  ]
+}`)
+	writeFile(t, root, "helpers.go", `package app
+
+func Async() {}
+
+type Interaction struct {
+	Endpoint string
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ async "/stats" }}`)
+
+	idx, needed, err := buildTemplateIndex(root)
+	if err != nil {
+		t.Fatalf("buildTemplateIndex() error = %v", err)
+	}
+	if !needed {
+		t.Fatal("index should be needed when config provides template functions")
+	}
+	if idx.Templates["templates/page.gohtml"].Funcs["async"] != "example.com/app.Async" {
+		t.Fatalf("template funcs = %#v", idx.Templates["templates/page.gohtml"].Funcs)
+	}
+	if got := len(idx.Funcs["example.com/app.Async"].Signatures); got != 2 {
+		t.Fatalf("configured signatures = %d, want 2", got)
 	}
 }
 
