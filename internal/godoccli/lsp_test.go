@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -1503,7 +1502,7 @@ func TestLSPCompletesImportedNamedTypeMethods(t *testing.T) {
 
 func TestLocationForTargetExpandsGoRoot(t *testing.T) {
 	got := targetPath("C:/project", "$GOROOT/src/time/time.go")
-	want := filepath.Join(runtime.GOROOT(), "src", "time", "time.go")
+	want := filepath.Join(goRootPath(), "src", "time", "time.go")
 	if got != want {
 		t.Fatalf("targetPath($GOROOT) = %q, want %q", got, want)
 	}

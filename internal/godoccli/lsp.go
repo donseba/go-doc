@@ -2,7 +2,6 @@ package godoccli
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,9 +11,9 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -112,10 +111,6 @@ type documentSymbol struct {
 	SelectionRange lspRange `json:"selectionRange"`
 	Detail         string   `json:"detail,omitempty"`
 	Children       []any    `json:"children,omitempty"`
-}
-
-type docRef struct {
-	URI string `json:"uri"`
 }
 
 type didOpenParams struct {
@@ -223,7 +218,6 @@ type scope struct {
 type fieldRef struct {
 	ownerType string
 	fieldName string
-	method    bool
 	start     int
 	end       int
 }
@@ -257,6 +251,37 @@ const (
 	semanticField
 	semanticType
 	semanticFunction
+)
+
+const (
+	lspServerName = "go-doc"
+	lspSource     = "go-doc"
+
+	goDocDir      = ".go-doc"
+	indexFileName = "index.json"
+
+	lspCommandMissingFieldApplied  = "goDoc.missingFieldApplied"
+	lspMethodPublishDiagnostics    = "textDocument/publishDiagnostics"
+	lspMethodSemanticTokensRefresh = "workspace/semanticTokens/refresh"
+	lspMethodWorkspaceApplyEdit    = "workspace/applyEdit"
+
+	lspDiagnosticsKey = "diagnostics"
+	lspQuickFixKind   = "quickfix"
+	lspShutdownMethod = "shutdown"
+
+	rpcContentFormat = "Content-Length: %d\r\n\r\n%s"
+
+	goRootMarker = "$GOROOT"
+	goRootEnv    = "GOROOT"
+
+	unknownFieldDiagnosticPrefix       = "Unknown field "
+	unknownTypedRootTypePrefix         = "Unknown go-doc typed root type "
+	unknownTypedRootTypeFormat         = unknownTypedRootTypePrefix + "'%s'"
+	moveDefineAnnotationsPrefix        = "Move go-doc annotations inside define "
+	moveDefineAnnotationsFormat        = moveDefineAnnotationsPrefix + "%q"
+	moveDefineAnnotationsCodeAction    = "Move go-doc annotations inside define"
+	missingFieldCodeActionTitleFormat  = "Add field %s %s to %s"
+	missingFieldAppliedCodeActionTitle = "Add missing field"
 )
 
 var (
@@ -348,7 +373,7 @@ func (s *lspServer) serve() error {
 		if err := writeRPCMessage(s.out, rpcMessage{JSONRPC: "2.0", ID: msg.ID, Result: result, Error: rpcErr}); err != nil {
 			return err
 		}
-		if msg.Method == "shutdown" {
+		if msg.Method == lspShutdownMethod {
 			s.shutdown = true
 		}
 	}
@@ -367,7 +392,7 @@ func (s *lspServer) handleRequest(msg rpcMessage) (any, *rpcError) {
 				"renameProvider":         map[string]any{"prepareProvider": true},
 				"codeActionProvider":     true,
 				"documentSymbolProvider": true,
-				"executeCommandProvider": map[string]any{"commands": []string{"goDoc.missingFieldApplied"}},
+				"executeCommandProvider": map[string]any{"commands": []string{lspCommandMissingFieldApplied}},
 				"semanticTokensProvider": map[string]any{
 					"legend": map[string]any{
 						"tokenTypes":     []string{"variable", "property", "type", "function"},
@@ -376,9 +401,9 @@ func (s *lspServer) handleRequest(msg rpcMessage) (any, *rpcError) {
 					"full": true,
 				},
 			},
-			"serverInfo": map[string]string{"name": "go-doc", "version": Version},
+			"serverInfo": map[string]string{"name": lspServerName, "version": Version},
 		}, nil
-	case "shutdown":
+	case lspShutdownMethod:
 		return nil, nil
 	case "textDocument/completion":
 		var params textDocumentPositionParams
@@ -486,7 +511,7 @@ func (s *lspServer) handleNotification(msg rpcMessage) error {
 
 func (s *lspServer) executeCommand(params executeCommandParams) *rpcError {
 	switch params.Command {
-	case "goDoc.missingFieldApplied":
+	case lspCommandMissingFieldApplied:
 		var args []missingFieldAppliedCommand
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
 			return parseError(err)
@@ -513,7 +538,7 @@ func (s *lspServer) applyWorkspaceEdit(applied missingFieldAppliedCommand) error
 		return nil
 	}
 	s.nextID++
-	return writeRPCRequest(s.out, s.nextID, "workspace/applyEdit", map[string]any{
+	return writeRPCRequest(s.out, s.nextID, lspMethodWorkspaceApplyEdit, map[string]any{
 		"label": fmt.Sprintf("Add field %s to %s", applied.FieldName, shortTypeName(applied.OwnerType)),
 		"edit": workspaceEdit{Changes: map[string][]textEdit{
 			applied.TargetURI: {{
@@ -618,7 +643,7 @@ func writeRPCMessage(writer io.Writer, msg rpcMessage) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(writer, "Content-Length: %d\r\n\r\n%s", len(data), data)
+	_, err = fmt.Fprintf(writer, rpcContentFormat, len(data), data)
 	return err
 }
 
@@ -635,7 +660,7 @@ func writeRPCNotification(writer io.Writer, method string, params any) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(writer, "Content-Length: %d\r\n\r\n%s", len(data), data)
+	_, err = fmt.Fprintf(writer, rpcContentFormat, len(data), data)
 	return err
 }
 
@@ -654,7 +679,7 @@ func writeRPCRequest(writer io.Writer, id int, method string, params any) error 
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(writer, "Content-Length: %d\r\n\r\n%s", len(data), data)
+	_, err = fmt.Fprintf(writer, rpcContentFormat, len(data), data)
 	return err
 }
 
@@ -679,7 +704,7 @@ func loadOrBuildIndex(root string) (indexFile, string, time.Time, error) {
 	if !cfg.enabled() {
 		return indexFile{Version: 2, Templates: map[string]templateIndex{}, Types: map[string]goTypeIndex{}, Funcs: map[string]goFuncIndex{}, Short: map[string][]string{}}, "", time.Time{}, nil
 	}
-	path := filepath.Join(root, ".go-doc", "index.json")
+	path := filepath.Join(root, goDocDir, indexFileName)
 	if cfg.WriteIndex {
 		data, err := os.ReadFile(path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -753,12 +778,12 @@ func (s *lspServer) refreshOpenDiagnostics() error {
 }
 
 func (s *lspServer) clearDiagnostics(uri string) error {
-	return writeRPCNotification(s.out, "textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []diagnostic{}})
+	return writeRPCNotification(s.out, lspMethodPublishDiagnostics, map[string]any{"uri": uri, lspDiagnosticsKey: []diagnostic{}})
 }
 
 func (s *lspServer) refreshSemanticTokens() error {
 	s.nextID++
-	return writeRPCRequest(s.out, s.nextID, "workspace/semanticTokens/refresh", nil)
+	return writeRPCRequest(s.out, s.nextID, lspMethodSemanticTokensRefresh, nil)
 }
 
 func (s *lspServer) index() lspIndex {
@@ -796,7 +821,7 @@ func (s *lspServer) loadIndexForRoot(root string) (lspIndex, bool) {
 	if !cfg.enabled() {
 		return lspIndex{indexFile: indexFile{Version: 2, Templates: map[string]templateIndex{}, Types: map[string]goTypeIndex{}, Funcs: map[string]goFuncIndex{}, Short: map[string][]string{}}, rootPath: root}, true
 	}
-	indexPath := filepath.Join(root, ".go-doc", "index.json")
+	indexPath := filepath.Join(root, goDocDir, indexFileName)
 	sourceMTime := latestSourceModTime(root)
 	stat, statErr := os.Stat(indexPath)
 	if cfg.WriteIndex && statErr == nil {
@@ -874,11 +899,11 @@ func latestSourceModTime(root string) time.Time {
 func nearestIndexRoot(path string) string {
 	dir := fileDir(path)
 	for dir != "" {
-		if filepath.Base(dir) == ".go-doc" {
+		if filepath.Base(dir) == goDocDir {
 			dir = filepath.Dir(dir)
 			continue
 		}
-		if fileExists(filepath.Join(dir, ".go-doc", "index.json")) {
+		if fileExists(filepath.Join(dir, goDocDir, indexFileName)) {
 			return dir
 		}
 		parent := filepath.Dir(dir)
@@ -1174,7 +1199,7 @@ func (s *lspServer) publishDiagnostics(uri string) error {
 	if items == nil {
 		items = []diagnostic{}
 	}
-	return writeRPCNotification(s.out, "textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": items})
+	return writeRPCNotification(s.out, lspMethodPublishDiagnostics, map[string]any{"uri": uri, lspDiagnosticsKey: items})
 }
 
 func hasGoDocAnnotation(text string) bool {
@@ -1208,7 +1233,7 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 		items = append(items, diagnostic{
 			Range:    rangeFromOffsets(text, start, end),
 			Severity: 2,
-			Source:   "go-doc",
+			Source:   lspSource,
 			Message:  fmt.Sprintf("Unknown go-doc dot type '%s'", raw),
 		})
 	}
@@ -1220,7 +1245,7 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, start, end),
 				Severity: 2,
-				Source:   "go-doc",
+				Source:   lspSource,
 				Message:  fmt.Sprintf("Unknown go-doc function '%s'", raw),
 			})
 		}
@@ -1230,7 +1255,7 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, ref.annotationStart, ref.annotationEnd),
 				Severity: 2,
-				Source:   "go-doc",
+				Source:   lspSource,
 				Message:  fmt.Sprintf("Unknown go-doc annotation '@%s'", ref.annotation),
 			})
 			continue
@@ -1239,7 +1264,7 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
 				Severity: 2,
-				Source:   "go-doc",
+				Source:   lspSource,
 				Message:  fmt.Sprintf("@%s %s needs a type or a configured default type", ref.annotation, ref.name),
 			})
 			continue
@@ -1254,8 +1279,8 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, ref.typeStart, ref.typeEnd),
 				Severity: 2,
-				Source:   "go-doc",
-				Message:  fmt.Sprintf("Unknown go-doc typed root type '%s'", ref.typeName),
+				Source:   lspSource,
+				Message:  fmt.Sprintf(unknownTypedRootTypeFormat, ref.typeName),
 			})
 		}
 	}
@@ -1271,7 +1296,7 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, match[4], match[5]),
 				Severity: 2,
-				Source:   "go-doc",
+				Source:   lspSource,
 				Message:  fmt.Sprintf("Cannot range over '%s' because it is %s", source, sourceType),
 			})
 		}
@@ -1316,7 +1341,7 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 				items = append(items, diagnostic{
 					Range:    rangeFromOffsets(text, start, start+len(root)),
 					Severity: 1,
-					Source:   "go-doc",
+					Source:   lspSource,
 					Message:  fmt.Sprintf("Unknown go-doc accessor '%s'", root),
 				})
 				continue
@@ -1335,7 +1360,7 @@ func diagnosticsForTextScoped(text string, idx lspIndex, contract templateIndex,
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, ref.start, ref.end),
 				Severity: 1,
-				Source:   "go-doc",
+				Source:   lspSource,
 				Message:  fmt.Sprintf("Unknown field '%s' on %s", ref.fieldName, owner.Name),
 			})
 		}
@@ -1354,14 +1379,14 @@ func typedRootCollisionDiagnostics(text string, contract templateIndex, symbols 
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
 				Severity: 1,
-				Source:   "go-doc",
+				Source:   lspSource,
 				Message:  fmt.Sprintf("Typed root name '%s' collides with built-in template function '%s'", ref.name, ref.name),
 			})
 		case contract.Funcs[ref.name] != "":
 			items = append(items, diagnostic{
 				Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
 				Severity: 1,
-				Source:   "go-doc",
+				Source:   lspSource,
 				Message:  fmt.Sprintf("Typed root name '%s' collides with template function '%s'", ref.name, ref.name),
 			})
 		}
@@ -1383,7 +1408,7 @@ func unusedNamedDeclarationDiagnostics(text string, idx lspIndex, contract templ
 		items = append(items, diagnostic{
 			Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
 			Severity: 2,
-			Source:   "go-doc",
+			Source:   lspSource,
 			Message:  fmt.Sprintf("Typed root '%s' is declared but not used", ref.name),
 		})
 	}
@@ -1398,7 +1423,7 @@ func unusedNamedDeclarationDiagnostics(text string, idx lspIndex, contract templ
 		items = append(items, diagnostic{
 			Range:    rangeFromOffsets(text, ref.nameStart, ref.nameEnd),
 			Severity: 2,
-			Source:   "go-doc",
+			Source:   lspSource,
 			Message:  fmt.Sprintf("Function '%s' is declared but not used", ref.name),
 		})
 	}
@@ -1471,7 +1496,7 @@ func unknownShorthandDiagnostics(text string, symbols symbolParseConfig) []diagn
 		items = append(items, diagnostic{
 			Range:    rangeFromOffsets(text, match[2], match[3]),
 			Severity: 2,
-			Source:   "go-doc",
+			Source:   lspSource,
 			Message:  fmt.Sprintf("Unknown go-doc annotation '@%s'; configure it in symbolAnnotations or use a named typed root", annotation),
 		})
 	}
@@ -1490,8 +1515,8 @@ func leadingDefineContractDiagnostics(text string) []diagnostic {
 		items = append(items, diagnostic{
 			Range:    rangeFromOffsets(text, commentStart, commentEnd),
 			Severity: 3,
-			Source:   "go-doc",
-			Message:  fmt.Sprintf("Move go-doc annotations inside define %q", name),
+			Source:   lspSource,
+			Message:  fmt.Sprintf(moveDefineAnnotationsFormat, name),
 		})
 	}
 	return items
@@ -1524,7 +1549,7 @@ func templateIncludeDiagnosticForAction(text string, actionStart int, actionText
 		return diagnostic{
 			Range:    rangeFromOffsets(text, nameStart, nameEnd),
 			Severity: 2,
-			Source:   "go-doc",
+			Source:   lspSource,
 			Message:  fmt.Sprintf("Template %s expects %s, got no data", name, shortTypeName(expected)),
 		}, true
 	}
@@ -1550,7 +1575,7 @@ func templateIncludeDiagnosticForAction(text string, actionStart int, actionText
 	return diagnostic{
 		Range:    rangeFromOffsets(text, expressionStart, expressionStart+len(trimmed)),
 		Severity: 2,
-		Source:   "go-doc",
+		Source:   lspSource,
 		Message:  fmt.Sprintf("Template %s expects %s, got %s", name, shortTypeName(expected), shortTypeName(actual)),
 	}, true
 }
@@ -1771,7 +1796,7 @@ func lenDiagnosticForAction(text string, actionStart int, actionText string, idx
 	return diagnostic{
 		Range:    rangeFromOffsets(text, expressionStart, expressionStart+len(expression)),
 		Severity: 2,
-		Source:   "go-doc",
+		Source:   lspSource,
 		Message:  fmt.Sprintf("Cannot call len on '%s' because it is %s", expression, valueType),
 	}, true
 }
@@ -1887,7 +1912,7 @@ func functionArgumentDiagnosticSingle(text string, actionStart int, name string,
 		return diagnostic{
 			Range:    rangeFromOffsets(text, actionStart+arg.Start, actionStart+arg.End),
 			Severity: 2,
-			Source:   "go-doc",
+			Source:   lspSource,
 			Message:  fmt.Sprintf("Cannot pass %s to %s argument %d because it expects %s", actual, name, index+1, expected),
 		}, true
 	}
@@ -1923,14 +1948,14 @@ func unsupportedFunctionReturnDiagnostic(text string, actionStart int, name stri
 		return diagnostic{
 			Range:    rangeFromOffsets(text, actionStart+functionStart, actionStart+functionEnd),
 			Severity: 2,
-			Source:   "go-doc",
+			Source:   lspSource,
 			Message:  fmt.Sprintf("Function %s cannot be used in a template action because it returns no value", name),
 		}, true
 	}
 	return diagnostic{
 		Range:    rangeFromOffsets(text, actionStart+functionStart, actionStart+functionEnd),
 		Severity: 2,
-		Source:   "go-doc",
+		Source:   lspSource,
 		Message:  fmt.Sprintf("Function %s has unsupported template return values (%s); use one value or (value, error)", name, strings.Join(results, ", ")),
 	}, true
 }
@@ -1985,7 +2010,7 @@ func pipelineFunctionDiagnosticForAction(text string, actionStart int, actionTex
 			return diagnostic{
 				Range:    rangeFromOffsets(text, actionStart+arg.Start, actionStart+arg.End),
 				Severity: 2,
-				Source:   "go-doc",
+				Source:   lspSource,
 				Message:  fmt.Sprintf("Cannot pass %s to %s argument %d because it expects %s", actual, name, argIndex+1, expected),
 			}, true
 		}
@@ -1996,7 +2021,7 @@ func pipelineFunctionDiagnosticForAction(text string, actionStart int, actionTex
 				return diagnostic{
 					Range:    rangeFromOffsets(text, actionStart+segments[index-1].Start, actionStart+segments[index-1].End),
 					Severity: 2,
-					Source:   "go-doc",
+					Source:   lspSource,
 					Message:  fmt.Sprintf("Cannot pipe %s to %s argument %d because it expects %s", prevType, name, pipedIndex+1, expected),
 				}, true
 			}
@@ -2027,14 +2052,14 @@ func functionReturnDiagnosticForAction(text string, actionStart int, actionText 
 		return diagnostic{
 			Range:    rangeFromOffsets(text, actionStart+start, actionStart+end),
 			Severity: 2,
-			Source:   "go-doc",
+			Source:   lspSource,
 			Message:  fmt.Sprintf("Function %s cannot be used in a template action because it returns no value", name),
 		}, true
 	}
 	return diagnostic{
 		Range:    rangeFromOffsets(text, actionStart+start, actionStart+end),
 		Severity: 2,
-		Source:   "go-doc",
+		Source:   lspSource,
 		Message:  fmt.Sprintf("Function %s has unsupported template return values (%s); use one value or (value, error)", name, strings.Join(results, ", ")),
 	}, true
 }
@@ -2071,7 +2096,7 @@ func functionArityDiagnosticForCount(text string, start, end int, name string, f
 	return diagnostic{
 		Range:    rangeFromOffsets(text, start, end),
 		Severity: 2,
-		Source:   "go-doc",
+		Source:   lspSource,
 		Message:  fmt.Sprintf("Function %s expects %s argument(s), got %d", name, want, argCount),
 	}, true
 }
@@ -2872,19 +2897,19 @@ func (s *lspServer) codeActions(params codeActionParams) []codeAction {
 			continue
 		}
 		switch {
-		case strings.HasPrefix(item.Message, "Unknown field "):
+		case strings.HasPrefix(item.Message, unknownFieldDiagnosticPrefix):
 			action, ok := missingFieldCodeAction(text, idx, contract, item)
 			if ok && !seen[action.Title] {
 				actions = append(actions, action)
 				seen[action.Title] = true
 			}
-		case strings.HasPrefix(item.Message, "Unknown go-doc typed root type "):
+		case strings.HasPrefix(item.Message, unknownTypedRootTypePrefix):
 			action, ok := missingModelCodeAction(idx, item)
 			if ok && !seen[action.Title] {
 				actions = append(actions, action)
 				seen[action.Title] = true
 			}
-		case strings.HasPrefix(item.Message, "Move go-doc annotations inside define "):
+		case strings.HasPrefix(item.Message, moveDefineAnnotationsPrefix):
 			action, ok := moveDefineContractCodeAction(params.TextDocument.URI, text, item)
 			if ok && !seen[action.Title] {
 				actions = append(actions, action)
@@ -2907,8 +2932,8 @@ func moveDefineContractCodeAction(uri string, text string, item diagnostic) (cod
 		comment := compactContractComment(strings.TrimSpace(text[commentStart:commentEnd]))
 		newText := "\n" + comment + "\n"
 		return codeAction{
-			Title:       "Move go-doc annotations inside define",
-			Kind:        "quickfix",
+			Title:       moveDefineAnnotationsCodeAction,
+			Kind:        lspQuickFixKind,
 			Diagnostics: []diagnostic{item},
 			Edit: &workspaceEdit{Changes: map[string][]textEdit{
 				uri: {
@@ -2948,12 +2973,12 @@ func missingFieldCodeAction(text string, idx lspIndex, contract templateIndex, i
 	targetURI := uriFromPath(filepath.Join(idx.rootPath, filepath.FromSlash(owner.File)))
 	editRange := lspRange{Start: positionAtFileOffset(idx.rootPath, owner.File, insertOffset), End: positionAtFileOffset(idx.rootPath, owner.File, insertOffset)}
 	action := codeAction{
-		Title:       fmt.Sprintf("Add field %s %s to %s", ref.fieldName, fieldType, owner.Name),
-		Kind:        "quickfix",
+		Title:       fmt.Sprintf(missingFieldCodeActionTitleFormat, ref.fieldName, fieldType, owner.Name),
+		Kind:        lspQuickFixKind,
 		Diagnostics: []diagnostic{item},
 		Command: &command{
-			Title:   fmt.Sprintf("Add field %s %s to %s", ref.fieldName, fieldType, owner.Name),
-			Command: "goDoc.missingFieldApplied",
+			Title:   fmt.Sprintf(missingFieldCodeActionTitleFormat, ref.fieldName, fieldType, owner.Name),
+			Command: lspCommandMissingFieldApplied,
 			Arguments: []any{missingFieldAppliedCommand{
 				Root:      idx.rootPath,
 				OwnerType: ref.ownerType,
@@ -2990,7 +3015,7 @@ func missingModelCodeAction(idx lspIndex, item diagnostic) (codeAction, bool) {
 	edit := missingModelTextEdit(dir, packageName, structName)
 	action := codeAction{
 		Title:       fmt.Sprintf("Create model struct %s", structName),
-		Kind:        "quickfix",
+		Kind:        lspQuickFixKind,
 		Diagnostics: []diagnostic{item},
 		Edit: &workspaceEdit{Changes: map[string][]textEdit{
 			targetURI: {edit},
@@ -4363,14 +4388,25 @@ func locationForTarget(root, file string, line, column int) any {
 
 func targetPath(root, file string) string {
 	file = filepath.FromSlash(file)
-	if strings.HasPrefix(file, "$GOROOT") {
-		rest := strings.TrimLeft(strings.TrimPrefix(file, "$GOROOT"), `\/`)
-		return filepath.Join(runtime.GOROOT(), rest)
+	if strings.HasPrefix(file, goRootMarker) {
+		rest := strings.TrimLeft(strings.TrimPrefix(file, goRootMarker), `\/`)
+		return filepath.Join(goRootPath(), rest)
 	}
 	if filepath.IsAbs(file) {
 		return file
 	}
 	return filepath.Join(root, file)
+}
+
+func goRootPath() string {
+	if root := strings.TrimSpace(os.Getenv(goRootEnv)); root != "" {
+		return root
+	}
+	out, err := exec.Command("go", "env", goRootEnv).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func pathFromURI(raw string) (string, error) {
@@ -4451,10 +4487,4 @@ func max(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func testRPCConversation(input string) (string, error) {
-	var out bytes.Buffer
-	err := runLSP(strings.NewReader(input), &out, ".")
-	return out.String(), err
 }
