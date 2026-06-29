@@ -3287,7 +3287,7 @@ func semanticTokensForTextScoped(text string, idx lspIndex, contract templateInd
 			end := action[0] + match[1]
 			token := actionText[match[0]:match[1]]
 			root := tokenRoot(token)
-			if _, _, ok := actionContract.typedRootType(root); ok || actionContract.Funcs[root] != "" || strings.HasPrefix(root, "$") {
+			if _, _, ok := actionContract.typedRootType(root); ok || strings.HasPrefix(root, "$") {
 				tokens = append(tokens, semanticToken{start: start, length: len(root), tokenType: semanticAccessor})
 			}
 			for _, ref := range fieldReferencesForToken(text, start, end, idx, actionContract) {
@@ -3376,13 +3376,14 @@ func templateFunctionTokensInAction(actionText string, idx lspIndex, contract te
 			cursor++
 		}
 		name := actionText[tokenStart:cursor]
-		if _, ok := builtInTemplateFuncs[name]; ok {
-			tokens = append(tokens, templateFunctionToken{name: name, start: tokenStart, end: cursor})
+		candidateName, candidateEnd := templateFunctionTokenCandidate(name, tokenStart, cursor)
+		if _, ok := builtInTemplateFuncs[candidateName]; ok {
+			tokens = append(tokens, templateFunctionToken{name: candidateName, start: tokenStart, end: candidateEnd})
 			continue
 		}
-		if fn := contract.Funcs[name]; fn != "" {
+		if fn := contract.Funcs[candidateName]; fn != "" {
 			if _, ok := idx.Funcs[fn]; ok {
-				tokens = append(tokens, templateFunctionToken{name: name, start: tokenStart, end: cursor})
+				tokens = append(tokens, templateFunctionToken{name: candidateName, start: tokenStart, end: candidateEnd})
 			}
 			continue
 		}
@@ -3391,6 +3392,13 @@ func templateFunctionTokensInAction(actionText string, idx lspIndex, contract te
 		}
 	}
 	return tokens
+}
+
+func templateFunctionTokenCandidate(token string, start, end int) (string, int) {
+	if dot := strings.Index(token, "."); dot > 0 {
+		return token[:dot], start + dot
+	}
+	return token, end
 }
 
 func templateFunctionInAction(actionText string, idx lspIndex, contract templateIndex) (string, int, int, bool) {

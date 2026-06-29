@@ -253,6 +253,17 @@ so this also works for helper packages that live in dependencies:
 func Async() {}
 ```
 
+Request-scoped helpers that are installed as closures can put `//go-doc:sig`
+directly above the FuncMap assignment. go-doc infers the template function name
+from the static string key:
+
+```go
+//go-doc:sig func() *net/url.URL
+funcs["url"] = func() *url.URL {
+    return state.URL
+}
+```
+
 Any non-special annotation with a name and type becomes a typed root: a named
 value that go-doc can complete, validate, hover, and navigate. `@model` is the
 recommended convention for page or fragment data. `@symbol`, `@component`,
@@ -387,7 +398,8 @@ string-keyed entries should be available in every template. `discover.functionMa
 defaults to `true` and enables scanning included Go files for
 `//go-doc:funcmap` annotations. `templateFunctions` is the richer form for
 helpers that need multiple signatures or use `//go-doc:sig` comments as their
-source of truth.
+source of truth. `//go-doc:sig` can annotate a named Go function or a closure
+assignment such as `funcs["url"] = func(...) { ... }`.
 `symbolAnnotations` describes custom annotation names that produce typed roots.
 Use this for framework concepts such as `@interaction`, `@component`,
 or any project-specific template value that should be completed and navigated

@@ -175,6 +175,7 @@ const (
 	funcMapAnnotation  = "go-doc:funcmap"
 
 	functionSourceAnnotatedFuncMap = 20
+	functionSourceAnnotatedSig     = 20
 	functionSourceConfigFuncMap    = 30
 	functionSourceConfigFunction   = 40
 
@@ -445,6 +446,7 @@ func scanGoTypes(root string, cfg indexConfig, idx *indexFile, funcs *templateFu
 			continue
 		}
 		indexPackageTypes(root, fileSet, pkg, idx)
+		discoverAnnotatedTemplateFunctionSignatures(root, fileSet, pkg, idx, funcs)
 		discoverAnnotatedFuncMaps(root, fileSet, pkg, cfg, idx, funcs)
 	}
 	return nil
@@ -481,6 +483,7 @@ func scanConfiguredTemplateFunctionPackages(root string, cfg indexConfig, idx *i
 			continue
 		}
 		indexPackageTypes(root, fileSet, pkg, idx)
+		discoverAnnotatedTemplateFunctionSignatures(root, fileSet, pkg, idx, funcs)
 		extractConfiguredFuncMaps(root, fileSet, pkg, cfg, idx, funcs)
 	}
 	reportMissingConfiguredFuncMaps(cfg, funcs)
@@ -577,6 +580,95 @@ func discoverAnnotatedFuncMaps(root string, fileSet *token.FileSet, pkg *package
 			}
 		}
 	}
+}
+
+func discoverAnnotatedTemplateFunctionSignatures(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, funcs *templateFunctionRegistry) {
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			decl, ok := decl.(*ast.FuncDecl)
+			if !ok || decl.Body == nil {
+				continue
+			}
+			for _, stmt := range decl.Body.List {
+				signatures := parseGoDocSignatures(statementLeadingComment(fileSet, file, stmt))
+				if len(signatures) == 0 {
+					continue
+				}
+				for _, name := range assignedTemplateFunctionNames(stmt) {
+					indexAnnotatedTemplateFunctionSignature(root, fileSet, pkg, idx, funcs, stmt, name, signatures)
+				}
+			}
+		}
+	}
+}
+
+func indexAnnotatedTemplateFunctionSignature(root string, fileSet *token.FileSet, pkg *packages.Package, idx *indexFile, funcs *templateFunctionRegistry, stmt ast.Stmt, name string, signatures []goFuncSignatureIndex) {
+	target := virtualPackageTemplateFunctionPath(pkg.PkgPath, name)
+	pos := fileSet.Position(stmt.Pos())
+	fn := idx.Funcs[target]
+	if fn.Name == "" {
+		fn.Name = name
+	}
+	if fn.Package == "" {
+		fn.Package = pkg.PkgPath
+	}
+	fn.File = rel(root, pos.Filename)
+	fn.Line = pos.Line
+	fn.Column = pos.Column
+	fn.Signatures = signatures
+	fn.Signature = signatures[0].Signature
+	fn.Params = signatures[0].Params
+	fn.Result = signatures[0].Result
+	fn.Results = signatures[0].Results
+	fn.ReturnOK = len(fn.Results) > 0 || fn.Result != ""
+	idx.Funcs[target] = fn
+	funcs.add(templateFunctionSource{
+		Name:     name,
+		Target:   target,
+		File:     rel(root, pos.Filename),
+		Priority: functionSourceAnnotatedSig,
+	})
+}
+
+func assignedTemplateFunctionNames(stmt ast.Stmt) []string {
+	assign, ok := stmt.(*ast.AssignStmt)
+	if !ok {
+		return nil
+	}
+	var names []string
+	for _, lhs := range assign.Lhs {
+		index, ok := lhs.(*ast.IndexExpr)
+		if !ok {
+			continue
+		}
+		name, ok := staticStringKey(index.Index)
+		if ok {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func statementLeadingComment(fileSet *token.FileSet, file *ast.File, stmt ast.Stmt) string {
+	stmtPos := fileSet.Position(stmt.Pos())
+	var selected *ast.CommentGroup
+	for _, group := range file.Comments {
+		end := fileSet.Position(group.End())
+		if end.Filename != stmtPos.Filename || end.Line >= stmtPos.Line {
+			continue
+		}
+		if selected == nil || group.End() > selected.End() {
+			selected = group
+		}
+	}
+	if selected == nil {
+		return ""
+	}
+	end := fileSet.Position(selected.End())
+	if end.Line+1 < stmtPos.Line {
+		return ""
+	}
+	return selected.Text()
 }
 
 func extractConfiguredFuncMaps(root string, fileSet *token.FileSet, pkg *packages.Package, cfg indexConfig, idx *indexFile, funcs *templateFunctionRegistry) {
@@ -859,22 +951,26 @@ func indexPackageTypeDecl(root string, fileSet *token.FileSet, pkg *packages.Pac
 		if !ok || obj.Pkg() == nil {
 			continue
 		}
-		named, structType := namedStruct(obj.Type())
-		if named == nil || structType == nil {
-			continue
-		}
 		position := fileSet.Position(typeSpec.Name.Pos())
 		fullName := qualifiedObjectName(obj)
-		idx.Types[fullName] = goTypeIndex{
+		indexed := goTypeIndex{
 			Name:    obj.Name(),
 			Package: obj.Pkg().Path(),
 			File:    rel(root, position.Filename),
 			Line:    position.Line,
 			Column:  position.Column,
 			Doc:     docText(firstDoc(typeSpec.Doc, decl.Doc)),
-			Fields:  exportedTypedFields(root, fileSet, pkg, idx, structType, typeSpec),
 			Methods: make(map[string]methodIndex),
 		}
+		if named, structType := namedStruct(obj.Type()); named != nil && structType != nil {
+			indexed.Fields = exportedTypedFields(root, fileSet, pkg, idx, structType, typeSpec)
+		} else if iface := namedInterface(obj.Type()); iface != nil {
+			indexed.Fields = map[string]fieldIndex{}
+			addMethodSet(root, fileSet, idx, pkg.Types, indexed.Methods, types.NewMethodSet(obj.Type()), nil)
+		} else {
+			continue
+		}
+		idx.Types[fullName] = indexed
 		idx.Short[obj.Name()] = append(idx.Short[obj.Name()], fullName)
 	}
 }
@@ -1221,6 +1317,19 @@ func namedStruct(typ types.Type) (*types.Named, *types.Struct) {
 	return named, structType
 }
 
+func namedInterface(typ types.Type) *types.Interface {
+	typ = types.Unalias(typ)
+	named, ok := typ.(*types.Named)
+	if !ok {
+		return nil
+	}
+	iface, ok := named.Underlying().(*types.Interface)
+	if !ok {
+		return nil
+	}
+	return iface
+}
+
 func receiverNamed(typ types.Type) *types.Named {
 	for {
 		switch t := types.Unalias(typ).(type) {
@@ -1375,7 +1484,13 @@ func exportedExternalFields(root string, fileSet *token.FileSet, idx *indexFile,
 			continue
 		}
 		fieldType := typeString(field.Type(), current)
-		fields[field.Name()] = fieldIndex{Type: fieldType}
+		indexed := fieldIndex{Type: fieldType}
+		if position := fileSet.Position(field.Pos()); position.IsValid() && position.Filename != "" {
+			indexed.File = rel(root, position.Filename)
+			indexed.Line = position.Line
+			indexed.Column = position.Column
+		}
+		fields[field.Name()] = indexed
 		indexReachableTypes(root, fileSet, idx, current, field.Type(), seen)
 	}
 	return fields
@@ -1756,6 +1871,10 @@ func configuredFunctionMap(cfg indexConfig) map[string]string {
 
 func virtualTemplateFunctionPath(name string) string {
 	return "$go-doc/templatefunc." + name
+}
+
+func virtualPackageTemplateFunctionPath(pkgPath, name string) string {
+	return "$go-doc/templatefunc." + pkgPath + "." + name
 }
 
 func contractScanText(src string) string {

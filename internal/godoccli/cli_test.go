@@ -912,6 +912,111 @@ func FormatDate(v string) string {
 	}
 }
 
+func TestBuildIndexFunctionMapIndexesInterfaceReturnMethods(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "funcs.go", `package app
+
+import "html/template"
+
+type Token interface {
+	Key() string
+	Token(Context) string
+}
+
+type Context struct {
+	ID string
+}
+
+//go-doc:funcmap
+func TemplateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"csrf": CSRF,
+	}
+}
+
+//go-doc:sig func() example.com/app.Token
+func CSRF() Token {
+	return nil
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ csrf.Key }} {{ csrf.Token . }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	token := idx.Types["example.com/app.Token"]
+	if token.Methods["Key"].Type != "string" {
+		t.Fatalf("Token.Key method missing: %#v", token)
+	}
+	if token.Methods["Token"].Type != "string" || len(token.Methods["Token"].Params) != 1 || token.Methods["Token"].Params[0] != "Context" {
+		t.Fatalf("Token.Token method = %#v", token.Methods["Token"])
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
+func TestBuildIndexReadsGoDocSignatureFromTemplateFuncAssignment(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")
+	writeFile(t, root, "funcs.go", `package app
+
+import (
+	"html/template"
+	"net/url"
+)
+
+type Runtime struct{}
+
+func addRequestFuncs(funcs template.FuncMap) {
+	// go-doc:sig func() *example.com/app.Runtime
+	funcs["runtime"] = func() *Runtime {
+		return nil
+	}
+
+	// go-doc:sig func() *net/url.URL
+	funcs["url"] = func() *url.URL {
+		return nil
+	}
+
+	// go-doc:sig func(runtime *example.com/app.Runtime, path string) html/template.HTML
+	// go-doc:sig func(runtime *example.com/app.Runtime, path string, dot any) html/template.HTML
+	funcs["partial"] = func(runtime *Runtime, path string, args ...any) template.HTML {
+		return ""
+	}
+}
+`)
+	writeFile(t, root, "templates/page.gohtml", `{{ url.Path }} {{ partial runtime "/nav" . }}`)
+
+	idx, err := buildIndex(root)
+	if err != nil {
+		t.Fatalf("buildIndex() error = %v", err)
+	}
+	tmpl := idx.Templates["templates/page.gohtml"]
+	urlTarget := tmpl.Funcs["url"]
+	if urlTarget == "" {
+		t.Fatalf("url function missing: %#v", tmpl.Funcs)
+	}
+	if idx.Funcs[urlTarget].Result != "*net/url.URL" {
+		t.Fatalf("url function metadata = %#v", idx.Funcs[urlTarget])
+	}
+	partialTarget := tmpl.Funcs["partial"]
+	if partialTarget == "" {
+		t.Fatalf("partial function missing: %#v", tmpl.Funcs)
+	}
+	if got := len(idx.Funcs[partialTarget].Signatures); got != 2 {
+		t.Fatalf("partial signatures = %#v, want 2", idx.Funcs[partialTarget].Signatures)
+	}
+	if got := idx.Funcs[partialTarget].Signatures[1].Params; len(got) != 3 || got[2] != "any" {
+		t.Fatalf("partial second signature params = %#v", idx.Funcs[partialTarget].Signatures[1])
+	}
+	if len(idx.Problems) != 0 {
+		t.Fatalf("unexpected problems: %#v", idx.Problems)
+	}
+}
+
 func TestBuildIndexUsesAnnotatedVarFunctionMap(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/app\n\ngo 1.26\n")

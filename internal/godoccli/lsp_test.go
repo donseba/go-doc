@@ -1587,6 +1587,123 @@ func TestLSPFindsDeclaredFunctionOperands(t *testing.T) {
 	}
 }
 
+func TestLSPHighlightsFunctionResultSelectorChains(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"net/url.URL": {
+				Name:   "URL",
+				File:   "net/url/url.go",
+				Line:   371,
+				Column: 6,
+				Fields: map[string]fieldIndex{
+					"Path": {Type: "string", File: "net/url/url.go", Line: 380, Column: 2},
+				},
+			},
+			"context.Context": {
+				Name:    "Context",
+				Methods: map[string]methodIndex{},
+			},
+			"example.com/app.RenderContext": {
+				Name: "RenderContext",
+				Fields: map[string]fieldIndex{
+					"Context": {Type: "context.Context"},
+				},
+			},
+			"example.com/app.Token": {
+				Name: "Token",
+				Methods: map[string]methodIndex{
+					"Key":   {Type: "string"},
+					"Token": {Type: "string", Params: []string{"context.Context"}},
+				},
+			},
+		},
+		Funcs: map[string]goFuncIndex{
+			"$go-doc/templatefunc.example.com/app.url": {Name: "url", Result: "*net/url.URL"},
+			"$go-doc/templatefunc.example.com/app.ctx": {Name: "ctx", Result: "*example.com/app.RenderContext"},
+			"example.com/app.CSRF":                     {Name: "CSRF", Result: "example.com/app.Token"},
+		},
+		Short: map[string][]string{
+			"URL":           {"net/url.URL"},
+			"Context":       {"context.Context"},
+			"RenderContext": {"example.com/app.RenderContext"},
+			"Token":         {"example.com/app.Token"},
+		},
+	}}
+	contract := templateIndex{Funcs: map[string]string{
+		"url":  "$go-doc/templatefunc.example.com/app.url",
+		"ctx":  "$go-doc/templatefunc.example.com/app.ctx",
+		"csrf": "example.com/app.CSRF",
+	}}
+	text := `{{ if url }}{{ url.Path }}{{ end }}
+{{ with url }}{{ .Path }}{{ end }}
+{{ csrf.Key }}
+{{ csrf.Token ctx.Context }}`
+
+	for _, item := range []struct {
+		name   string
+		offset int
+	}{
+		{name: "url", offset: strings.Index(text, "url.Path") + 1},
+		{name: "csrf", offset: strings.Index(text, "csrf.Key") + 1},
+		{name: "ctx", offset: strings.Index(text, "ctx.Context") + 1},
+	} {
+		got, _, _, ok := templateFunctionAt(text, item.offset, idx, contract)
+		if !ok || got != item.name {
+			t.Fatalf("templateFunctionAt(%s) = %q, %v", item.name, got, ok)
+		}
+	}
+
+	for _, item := range []struct {
+		name   string
+		offset int
+	}{
+		{name: "Path", offset: strings.Index(text, "url.Path") + len("url.") + 1},
+		{name: "Path", offset: strings.LastIndex(text, ".Path") + 2},
+		{name: "Key", offset: strings.Index(text, "Key") + 1},
+		{name: "Token", offset: strings.Index(text, "Token") + 1},
+		{name: "Context", offset: strings.Index(text, "Context") + 1},
+	} {
+		ref, ok := fieldReferenceAt(text, item.offset, idx, contract)
+		if !ok || ref.fieldName != item.name {
+			t.Fatalf("fieldReferenceAt(%s) = %#v, %v", item.name, ref, ok)
+		}
+	}
+
+	tokens := semanticTokensForText(text, idx, contract)
+	for _, name := range []string{"url", "csrf", "ctx"} {
+		if !hasSemanticToken(text, tokens, name, semanticFunction) {
+			t.Fatalf("tokens = %#v, want semantic function token for %s", tokens, name)
+		}
+	}
+	for _, name := range []string{"Path", "Key", "Token", "Context"} {
+		if !hasSemanticToken(text, tokens, name, semanticField) {
+			t.Fatalf("tokens = %#v, want semantic field token for %s", tokens, name)
+		}
+	}
+	if got := semanticTokenCount(text, tokens, "Path", semanticField); got != 2 {
+		t.Fatalf("Path semantic token count = %d, want 2 in %#v", got, tokens)
+	}
+
+	uri := "file:///template.gohtml"
+	server := &lspServer{
+		root: ".",
+		idx: indexFile{
+			Templates: map[string]templateIndex{"template.gohtml": contract},
+			Types:     idx.Types,
+			Funcs:     idx.Funcs,
+			Short:     idx.Short,
+		},
+		docs: map[string]string{uri: text},
+	}
+	definitionResult := server.definition(textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     positionAt(text, strings.LastIndex(text, ".Path")+2),
+	})
+	if definitionResult == nil {
+		t.Fatal("definition(.Path) = nil, want URL.Path location")
+	}
+}
+
 func TestLSPDiagnosticsWarnsWhenLenCannotApply(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{
@@ -2730,6 +2847,25 @@ func hasCompletionLabel(items []completionItem, label string) bool {
 		}
 	}
 	return false
+}
+
+func hasSemanticToken(text string, tokens []semanticToken, value string, tokenType int) bool {
+	for _, token := range tokens {
+		if token.tokenType == tokenType && text[token.start:token.start+token.length] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func semanticTokenCount(text string, tokens []semanticToken, value string, tokenType int) int {
+	count := 0
+	for _, token := range tokens {
+		if token.tokenType == tokenType && text[token.start:token.start+token.length] == value {
+			count++
+		}
+	}
+	return count
 }
 
 func completionsForText(t *testing.T, text string, idx lspIndex, contract templateIndex, offset int) []completionItem {
