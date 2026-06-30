@@ -29,6 +29,9 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                         val project = file.project
                         val index = GoDocIndex.load(project, virtualFile.path)
                         val elementRange = element.textRange ?: return@goDocReadAction PsiReference.EMPTY_ARRAY
+                        val templateRange = goDocTemplateActionRange(element, file.text)
+                        val scanStart = templateRange?.first ?: elementRange.startOffset
+                        val scanEnd = templateRange?.second ?: elementRange.endOffset
                         val references = mutableListOf<PsiReference>()
 
                         GoDocTemplateContext.typedRootReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
@@ -59,7 +62,7 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                                 )
                             }
 
-                        GoDocTemplateContext.funcReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
+                        GoDocTemplateContext.funcReferencesInRange(file.text, scanStart, scanEnd, index)
                             .forEach { ref ->
                                 if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
                                 val fn = index.funcs[ref.funcName] ?: return@forEach
@@ -73,7 +76,7 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                                 )
                             }
 
-                        GoDocTemplateContext.templateIncludeReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index)
+                        GoDocTemplateContext.templateIncludeReferencesInRange(file.text, scanStart, scanEnd, index)
                             .forEach { ref ->
                                 if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
                                 references.add(
@@ -86,9 +89,9 @@ class GoDocReferenceContributor : PsiReferenceContributor() {
                                 )
                             }
 
-                        val contract = index.contractForFileAt(project, virtualFile.path, elementRange.startOffset)
+                        val contract = index.contractForFileAt(project, virtualFile.path, scanStart)
                             ?: return@goDocReadAction references.toTypedArray()
-                        GoDocTemplateContext.fieldReferencesInRange(file.text, elementRange.startOffset, elementRange.endOffset, index, contract)
+                        GoDocTemplateContext.fieldReferencesInRange(file.text, scanStart, scanEnd, index, contract)
                             .forEach { ref ->
                                 if (!elementOwnsToken(element, ref.startOffset, ref.endOffset)) return@forEach
                                 val owner = index.types[ref.ownerTypeName] ?: return@forEach
@@ -131,8 +134,11 @@ private fun elementOwnsToken(element: PsiElement, absoluteStart: Int, absoluteEn
     while (leaf.parent != null && leaf.textRange != null && !leaf.textRange.containsRange(absoluteStart, absoluteEnd)) {
         leaf = leaf.parent
     }
-    return leaf == element
+    if (leaf == element) return true
+    return element.textLength <= maxTemplateReferenceOwnerLength && element.text.contains("{{")
 }
+
+private const val maxTemplateReferenceOwnerLength = 500
 
 private class GoDocPsiReference(
     element: PsiElement,

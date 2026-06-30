@@ -44,3 +44,5 @@ ide/sublime/*.sublime-package
 !examples/showcase/.go-doc/index.json
 !examples/symbols/.go-doc/
 !examples/symbols/.go-doc/config.json
+
+RELEASE_NOTES_*

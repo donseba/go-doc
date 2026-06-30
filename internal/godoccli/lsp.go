@@ -213,6 +213,7 @@ func (idx lspIndex) symbolParseConfig() symbolParseConfig {
 type scope struct {
 	dotType string
 	vars    map[string]string
+	kind    string
 }
 
 type fieldRef struct {
@@ -3754,6 +3755,7 @@ func resolveFieldValuePath(idx lspIndex, rootType string, fields []string) strin
 		if !ok {
 			return ""
 		}
+		valueType = qualifyMemberType(idx, current, valueType)
 		if i == len(fields)-1 {
 			return valueType
 		}
@@ -3781,6 +3783,46 @@ func memberValueType(typ goTypeIndex, name string) (string, bool) {
 		return method.Type, true
 	}
 	return "", false
+}
+
+func qualifyMemberType(idx lspIndex, ownerType, typeExpr string) string {
+	owner := idx.Types[ownerType]
+	if owner.Package == "" {
+		return typeExpr
+	}
+	return qualifyTypeInPackage(idx, owner.Package, typeExpr)
+}
+
+func qualifyTypeInPackage(idx lspIndex, pkg, typeExpr string) string {
+	typeExpr = strings.TrimSpace(typeExpr)
+	switch {
+	case typeExpr == "":
+		return typeExpr
+	case strings.HasPrefix(typeExpr, "*"):
+		return "*" + qualifyTypeInPackage(idx, pkg, strings.TrimSpace(strings.TrimPrefix(typeExpr, "*")))
+	case strings.HasPrefix(typeExpr, "[]"):
+		return "[]" + qualifyTypeInPackage(idx, pkg, strings.TrimSpace(strings.TrimPrefix(typeExpr, "[]")))
+	case strings.HasPrefix(typeExpr, "["):
+		end := strings.Index(typeExpr, "]")
+		if end < 0 || end+1 >= len(typeExpr) {
+			return typeExpr
+		}
+		return typeExpr[:end+1] + qualifyTypeInPackage(idx, pkg, strings.TrimSpace(typeExpr[end+1:]))
+	case strings.HasPrefix(typeExpr, "map["):
+		end := strings.Index(typeExpr, "]")
+		if end < 0 || end+1 >= len(typeExpr) {
+			return typeExpr
+		}
+		return typeExpr[:end+1] + qualifyTypeInPackage(idx, pkg, strings.TrimSpace(typeExpr[end+1:]))
+	}
+	if strings.Contains(typeExpr, ".") || strings.Contains(typeExpr, "/") {
+		return typeExpr
+	}
+	candidate := pkg + "." + typeExpr
+	if _, ok := idx.Types[candidate]; ok {
+		return candidate
+	}
+	return typeExpr
 }
 
 func resolveGoType(idx lspIndex, typeExpr string) string {
@@ -3879,7 +3921,7 @@ func stripPointer(typeExpr string) string {
 }
 
 func scopeAt(text string, offset int, idx lspIndex, contract templateIndex) scope {
-	stack := []scope{{dotType: contract.Dot, vars: map[string]string{}}}
+	stack := []scope{{dotType: contract.Dot, vars: map[string]string{}, kind: "root"}}
 	before := text[:max(0, min(offset, len(text)))]
 	for _, match := range lspScopeActionPattern.FindAllStringSubmatchIndex(before, -1) {
 		action := strings.TrimSpace(strings.Trim(before[match[2]:match[3]], "- "))
@@ -3890,16 +3932,18 @@ func scopeAt(text string, offset int, idx lspIndex, contract templateIndex) scop
 		case "range":
 			sourceType := resolveExpressionValueType(idx, contract, sourceExpression(expression), parent.dotType)
 			itemType := rangeElementType(idx, sourceType)
-			stack = append(stack, scope{dotType: itemType, vars: mergeVars(parent.vars, rangeVariables(expression, itemType))})
+			stack = append(stack, scope{dotType: itemType, vars: mergeVars(parent.vars, rangeVariables(expression, itemType)), kind: "range"})
 		case "with":
 			valueType := resolveExpressionType(idx, contract, sourceExpression(expression), parent.dotType)
-			stack = append(stack, scope{dotType: valueType, vars: mergeVars(parent.vars, assignedVariable(expression, idx, contract, parent.dotType))})
+			stack = append(stack, scope{dotType: valueType, vars: mergeVars(parent.vars, assignedVariable(expression, idx, contract, parent.dotType)), kind: "with"})
+		case "if":
+			stack = append(stack, scope{dotType: parent.dotType, vars: mergeVars(parent.vars, assignedVariable(expression, idx, contract, parent.dotType)), kind: "if"})
 		case "end":
 			if len(stack) > 1 {
 				stack = stack[:len(stack)-1]
 			}
 		default:
-			stack[len(stack)-1] = scope{dotType: parent.dotType, vars: mergeVars(parent.vars, assignedVariable(action, idx, contract, parent.dotType))}
+			stack[len(stack)-1] = scope{dotType: parent.dotType, vars: mergeVars(parent.vars, assignedVariable(action, idx, contract, parent.dotType)), kind: parent.kind}
 		}
 	}
 	return stack[len(stack)-1]
@@ -4066,6 +4110,7 @@ func fieldReferencesForToken(text string, start, end int, idx lspIndex, contract
 		if !ok {
 			return refs
 		}
+		valueType = qualifyMemberType(idx, ownerType, valueType)
 		ownerType = resolveGoType(idx, valueType)
 		if ownerType == "" {
 			ownerType = valueType

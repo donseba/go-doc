@@ -264,7 +264,7 @@ object GoDocTemplateContext {
             .takeWhile { it.range.first < scan.last }
             .flatMap { match ->
                 if (inTemplateComment(text, match.range.first)) return@flatMap emptyList()
-                if (inQuotedString(text, match.range.first)) return@flatMap emptyList()
+                if (inTemplateStringLiteral(text, match.range.first)) return@flatMap emptyList()
                 val token = match.value
                 if (!token.contains('.') && contract.typedRootType(token) == null) return@flatMap emptyList()
                 fieldReferencesForToken(
@@ -492,7 +492,7 @@ object GoDocTemplateContext {
     }
 
     private fun scopeAt(text: String, offset: Int, index: GoDocIndex, contract: TemplateContract): ScopeInfo {
-        val stack = mutableListOf(ScopeInfo(dotType = contract.dot.ifBlank { null }, vars = emptyMap()))
+        val stack = mutableListOf(ScopeInfo(dotType = contract.dot.ifBlank { null }, vars = emptyMap(), kind = "root"))
         val beforeCaret = text.substring(0, offset.coerceIn(0, text.length))
 
         for (match in actionPattern.findAll(beforeCaret)) {
@@ -507,6 +507,7 @@ object GoDocTemplateContext {
                         ScopeInfo(
                             dotType = elementType,
                             vars = parent.vars + rangeVariables(expression, elementType),
+                            kind = "range",
                         ),
                     )
                 }
@@ -515,6 +516,16 @@ object GoDocTemplateContext {
                         ScopeInfo(
                             dotType = index.resolveExpressionType(contract, sourceExpression(expression), parent.dotType),
                             vars = parent.vars,
+                            kind = "with",
+                        ),
+                    )
+                }
+                "if" -> {
+                    stack.add(
+                        ScopeInfo(
+                            dotType = parent.dotType,
+                            vars = parent.vars,
+                            kind = "if",
                         ),
                     )
                 }
@@ -606,6 +617,17 @@ object GoDocTemplateContext {
         return inQuote
     }
 
+    private fun inTemplateStringLiteral(text: String, offset: Int): Boolean {
+        val boundedOffset = offset.coerceIn(0, text.length)
+        val actionStart = text.lastIndexOf("{{", boundedOffset)
+        if (actionStart < 0) return false
+        val previousActionEnd = text.lastIndexOf("}}", boundedOffset)
+        if (previousActionEnd > actionStart) return false
+        val actionEnd = text.indexOf("}}", actionStart)
+        if (actionEnd >= 0 && boundedOffset > actionEnd) return false
+        return inQuotedString(text.substring(actionStart + 2, boundedOffset), boundedOffset - actionStart - 2)
+    }
+
     private fun normalizeType(typeExpr: String): String {
         val lastSlash = typeExpr.lastIndexOf('/')
         val lastDot = typeExpr.lastIndexOf('.')
@@ -619,6 +641,7 @@ object GoDocTemplateContext {
     private data class ScopeInfo(
         val dotType: String?,
         val vars: Map<String, String>,
+        val kind: String,
     )
 
     private data class Token(
@@ -642,7 +665,7 @@ object GoDocTemplateContext {
         return typedRootDeclarationPattern.findAll(before).map { it.groupValues[2] }.toSet()
     }
 
-    private val actionPattern = Regex("""\{\{\s*(?:-)?\s*(range|with|end)\b([^}]*)\}\}""")
+    private val actionPattern = Regex("""\{\{\s*(?:-)?\s*(range|with|if|end)\b([^}]*)\}\}""")
     private val templateActionPattern = Regex("""\{\{\s*(?:-)?\s*[^}]*\}\}""")
     private val templateIncludePattern = Regex("""^\{\{\s*(?:-)?\s*(?:template|block)\s+"([^"]+)"(?:\s+[^}]*)?\s*-?\}\}$""")
     private val dotContractPattern = Regex("""(?m)^\s*@dot\s+([A-Za-z0-9_./\-]+)""")

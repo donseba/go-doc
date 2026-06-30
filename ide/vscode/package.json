@@ -2,7 +2,7 @@
   "name": "go-doc-vscode",
   "displayName": "go-doc",
   "description": "Typed Go template contracts with completion, diagnostics, hover, navigation, semantic highlighting, static FuncMap discovery, and provider package support.",
-  "version": "0.13.3",
+  "version": "0.13.4",
   "publisher": "donseba",
   "author": {
     "name": "Sebastiano Bellinzis",
@@ -25,6 +25,7 @@
     "LICENSE",
     "README.md",
     "package.json",
+    "syntaxes/**",
     "node_modules/**"
   ],
   "categories": [
@@ -59,6 +60,16 @@
           ".tmpl"
         ],
         "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "go-template",
+        "scopeName": "text.html.go-template",
+        "path": "./syntaxes/go-template.tmLanguage.json",
+        "embeddedLanguages": {
+          "text.html.basic": "html"
+        }
       }
     ],
     "commands": [

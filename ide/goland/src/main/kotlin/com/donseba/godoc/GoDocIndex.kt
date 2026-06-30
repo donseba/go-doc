@@ -403,8 +403,8 @@ class GoDocIndex(
 
     fun membersForType(typeName: String?): Map<String, String> {
         val type = types[typeName] ?: return emptyMap()
-        return type.fields.mapValues { (_, field) -> field.type } +
-            type.methods.mapValues { (_, method) -> method.type }
+        return type.fields.mapValues { (_, field) -> qualifyMemberType(typeName, field.type) } +
+            type.methods.mapValues { (_, method) -> qualifyMemberType(typeName, method.type) }
     }
 
     fun resolveExpressionType(contract: TemplateContract, expression: String, dotType: String? = null): String? {
@@ -505,7 +505,7 @@ class GoDocIndex(
         var current: String? = rootType
         for ((index, field) in fields.withIndex()) {
             val typ = types[current] ?: return null
-            val memberType = typ.fields[field]?.type ?: typ.methods[field]?.type ?: return null
+            val memberType = qualifyMemberType(current, typ.fields[field]?.type ?: typ.methods[field]?.type ?: return null)
             if (index == fields.lastIndex) return memberType
             current = resolveGoType(memberType)
         }
@@ -541,6 +541,31 @@ class GoDocIndex(
         val end = typeExpr.indexOf(']')
         if (end == -1 || end + 1 >= typeExpr.length) return null
         return typeExpr.substring(end + 1)
+    }
+
+    private fun qualifyMemberType(ownerType: String?, typeExpr: String): String {
+        val ownerPackage = types[ownerType]?.pkg?.takeIf { it.isNotBlank() } ?: return typeExpr
+        return qualifyTypeInPackage(ownerPackage, typeExpr)
+    }
+
+    private fun qualifyTypeInPackage(pkg: String, typeExpr: String): String {
+        val clean = typeExpr.trim()
+        return when {
+            clean.isBlank() -> clean
+            clean.startsWith("*") -> "*" + qualifyTypeInPackage(pkg, clean.removePrefix("*").trim())
+            clean.startsWith("[]") -> "[]" + qualifyTypeInPackage(pkg, clean.removePrefix("[]").trim())
+            clean.startsWith("[") -> {
+                val end = clean.indexOf(']')
+                if (end == -1 || end + 1 >= clean.length) clean else clean.substring(0, end + 1) + qualifyTypeInPackage(pkg, clean.substring(end + 1).trim())
+            }
+            clean.startsWith("map[") -> {
+                val end = clean.indexOf(']')
+                if (end == -1 || end + 1 >= clean.length) clean else clean.substring(0, end + 1) + qualifyTypeInPackage(pkg, clean.substring(end + 1).trim())
+            }
+            clean.contains(".") || clean.contains("/") -> clean
+            types.containsKey("$pkg.$clean") -> "$pkg.$clean"
+            else -> clean
+        }
     }
 
     private fun normalizeGoType(typeExpr: String): String {

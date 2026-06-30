@@ -1607,6 +1607,64 @@ func TestLSPDefinitionForGeneratedNamespaceDeclarations(t *testing.T) {
 	}
 }
 
+func TestLSPScopeKeepsRangeDotInsideIf(t *testing.T) {
+	idx := lspIndex{indexFile: indexFile{
+		Types: map[string]goTypeIndex{
+			"example.com/app.DocsNavPage": {
+				Name:    "DocsNavPage",
+				Package: "example.com/app",
+				Fields: map[string]fieldIndex{
+					"Nav": {Type: "[]NavItem"},
+				},
+			},
+			"example.com/app.NavItem": {
+				Name:    "NavItem",
+				Package: "example.com/app",
+				Fields: map[string]fieldIndex{
+					"Group": {Type: "string"},
+					"Path":  {Type: "string"},
+					"Label": {Type: "string"},
+				},
+			},
+			"example.com/other.NavItem": {
+				Name:    "NavItem",
+				Package: "example.com/other",
+				Fields:  map[string]fieldIndex{},
+			},
+		},
+		Short: map[string][]string{
+			"NavItem": {"example.com/app.NavItem", "example.com/other.NavItem"},
+		},
+	}}
+	contract := templateIndex{Dot: "example.com/app.DocsNavPage"}
+	text := `{{ range .Nav }}
+{{ if eq .Group "Reference" }}
+<a href="{{ .Path }}">{{ .Label }}</a>
+{{ end }}
+{{ end }}`
+
+	ref, ok := fieldReferenceAt(text, strings.Index(text, ".Label")+2, idx, contract)
+	if !ok || ref.ownerType != "example.com/app.NavItem" || ref.fieldName != "Label" {
+		t.Fatalf(".Label ref = %#v, %v; want NavItem.Label", ref, ok)
+	}
+	diagnostics := diagnosticsForText(text, idx, contract)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", diagnostics)
+	}
+
+	items := completionsForText(t, text, idx, contract, strings.Index(text, "{{ if eq .")+len("{{ if eq ."))
+	if !hasCompletionLabel(items, "Group") || !hasCompletionLabel(items, "Path") || !hasCompletionLabel(items, "Label") {
+		t.Fatalf("items = %#v, want NavItem field completions", items)
+	}
+
+	tokens := semanticTokensForText(text, idx, contract)
+	for _, name := range []string{"Group", "Path", "Label"} {
+		if !hasSemanticToken(text, tokens, name, semanticField) {
+			t.Fatalf("tokens = %#v, want semantic field token for %s", tokens, name)
+		}
+	}
+}
+
 func TestLSPFindsDeclaredFunctionOperands(t *testing.T) {
 	idx := lspIndex{indexFile: indexFile{
 		Types: map[string]goTypeIndex{

@@ -69,9 +69,7 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
             """.trimIndent()
         }
 
-        val reference = hoverOffsets.firstNotNullOfOrNull { offset ->
-            GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract)
-        } ?: return null
+        val reference = fieldReferenceForHover(file.text, source, hoverOffsets, index, contract) ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
         if (contract.isTypedRoot(reference.memberName, reference.ownerTypeName)) {
             val doc = owner.doc.ifBlank { "No type documentation found in the Go source." }
@@ -140,9 +138,7 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
             return "${fn.name} ${fn.signature.ifBlank { fn.fqName }}".trim()
         }
 
-        val reference = hoverOffsets.firstNotNullOfOrNull { offset ->
-            GoDocTemplateContext.fieldReferenceAt(file.text, offset, index, contract)
-        } ?: return null
+        val reference = fieldReferenceForHover(file.text, source, hoverOffsets, index, contract) ?: return null
         val owner = index.types[reference.ownerTypeName] ?: return null
         if (contract.isTypedRoot(reference.memberName, reference.ownerTypeName)) {
             return "${owner.name} ${owner.fqName}".trim()
@@ -184,6 +180,47 @@ class GoDocDocumentationProvider : AbstractDocumentationProvider() {
         return offsets
             .filter { it >= 0 && it <= text.length }
             .distinct()
+    }
+
+    private fun fieldReferenceForHover(
+        text: String,
+        element: PsiElement,
+        hoverOffsets: List<Int>,
+        index: GoDocIndex,
+        contract: TemplateContract,
+    ): GoDocFieldReference? {
+        hoverOffsets.firstNotNullOfOrNull { offset ->
+            GoDocTemplateContext.fieldReferenceAt(text, offset, index, contract)
+        }?.let { return it }
+
+        val actionRange = goDocTemplateActionRange(element, text) ?: return null
+        val references = GoDocTemplateContext.fieldReferencesInRange(
+            text,
+            actionRange.first,
+            actionRange.second,
+            index,
+            contract,
+        )
+        return closestFieldReference(hoverOffsets, references)
+    }
+
+    private fun closestFieldReference(
+        offsets: List<Int>,
+        references: List<GoDocFieldReference>,
+    ): GoDocFieldReference? {
+        return references.firstOrNull { reference ->
+            offsets.any { offset -> offset >= reference.startOffset && offset <= reference.endOffset }
+        } ?: references.minByOrNull { reference ->
+            offsets.minOf { offset -> distanceToRange(offset, reference.startOffset, reference.endOffset) }
+        }
+    }
+
+    private fun distanceToRange(offset: Int, start: Int, end: Int): Int {
+        return when {
+            offset < start -> start - offset
+            offset > end -> offset - end
+            else -> 0
+        }
     }
 
     private fun isTemplateTokenChar(char: Char): Boolean {
